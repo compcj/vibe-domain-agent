@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import select
 
 from app.dependencies import DB, Admin
-from app.models import Agent, ModelConnection
+from app.models import Agent, AgentVersion, ModelConnection
 from app.routers.users import get_object
 from app.schemas import ModelInput, ModelPatch, ModelRead
 from app.security import audit, decrypt_secret, encrypt_secret
@@ -64,7 +64,13 @@ def update_model(identifier: UUID, data: ModelPatch, request: Request, db: DB, a
 @router.delete("/{identifier}", status_code=204)
 def delete_model(identifier: UUID, db: DB, admin: Admin):
     model = get_object(db, ModelConnection, identifier)
-    if any(agent.draft.get("model_id") == model.id for agent in db.scalars(select(Agent))):
+    draft_reference = db.scalar(
+        select(Agent.id).where(Agent.draft["model_id"].as_string() == model.id)
+    )
+    version_reference = db.scalar(
+        select(AgentVersion.id).where(AgentVersion.snapshot["model_id"].as_string() == model.id)
+    )
+    if draft_reference or version_reference:
         raise HTTPException(409, "Model is referenced by an Agent; disable it instead")
     db.delete(model)
     audit(db, admin, "delete", "model", str(identifier))

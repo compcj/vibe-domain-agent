@@ -1,9 +1,11 @@
 import secrets
-from datetime import UTC, timedelta
+from datetime import timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from sqlalchemy import delete, select
+from sqlalchemy import case, delete, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as postgres_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from app.dependencies import DB, CurrentUser, require_csrf
 from app.models import LoginSession, LoginThrottle, User, utcnow
@@ -13,29 +15,47 @@ from app.security import DUMMY_HASH, audit, csrf_token, hash_password, token_has
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
 
+def reserve_login_attempt(db, key, now):
+    insert = postgres_insert if db.get_bind().dialect.name == "postgresql" else sqlite_insert
+    expired = LoginThrottle.window_start < now - timedelta(minutes=15)
+    statement = (
+        insert(LoginThrottle)
+        .values(key=key, failures=1, window_start=now)
+        .on_conflict_do_update(
+            index_elements=[LoginThrottle.key],
+            set_={
+                "failures": case((expired, 1), else_=LoginThrottle.failures + 1),
+                "window_start": case((expired, now), else_=LoginThrottle.window_start),
+            },
+            where=or_(expired, LoginThrottle.failures < 10),
+        )
+        .returning(LoginThrottle.window_start)
+    )
+    window_start = db.scalar(statement)
+    # Commit the reservation before password hashing so other workers observe it.
+    db.commit()
+    if window_start is None:
+        raise HTTPException(429, "Too many login attempts; try again later")
+    return window_start
+
+
 @router.post("/login", response_model=AuthRead)
 def login(data: Login, request: Request, response: Response, db: DB):
     email = data.email.strip().lower()
     key = token_hash(f"{request.client.host if request.client else 'unknown'}:{email}")
-    throttle = db.get(LoginThrottle, key)
     now = utcnow()
-    if throttle and throttle.window_start.replace(tzinfo=UTC) < now - timedelta(minutes=15):
-        db.delete(throttle)
-        db.flush()
-        throttle = None
-    if throttle and throttle.failures >= 10:
-        raise HTTPException(429, "Too many login attempts; try again later")
+    window_start = reserve_login_attempt(db, key, now)
     user = db.scalar(select(User).where(User.email == email))
     valid = verify_password(user.password_hash if user else DUMMY_HASH, data.password)
     if not user or not valid or not user.active:
-        if not throttle:
-            throttle = LoginThrottle(key=key, failures=0)
-            db.add(throttle)
-        throttle.failures += 1
-        db.commit()
         raise HTTPException(401, "Invalid email or password")
-    if throttle:
-        db.delete(throttle)
+    # Release only this successful attempt, preserving concurrent failures and
+    # avoiding changes to a newer window if password verification ran slowly.
+    db.execute(
+        update(LoginThrottle)
+        .where(LoginThrottle.key == key, LoginThrottle.window_start == window_start)
+        .values(failures=LoginThrottle.failures - 1)
+    )
     settings = request.app.state.settings
     token = secrets.token_urlsafe(48)
     db.add(

@@ -4,6 +4,7 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
+from pydantic import ValidationError
 from sqlalchemy import select
 
 from app.config import get_settings
@@ -29,12 +30,19 @@ def main():
         command.upgrade(migration_config(), "head")
         return
     settings = get_settings()
-    data = UserCreate(
-        email=input("Email: "),
-        display_name=input("Display name: "),
-        password=getpass.getpass("Password (at least 12 characters): "),
-        role="admin",
-    )
+    try:
+        data = UserCreate(
+            email=input("Email: "),
+            display_name=input("Display name: "),
+            password=getpass.getpass("Password (at least 12 characters): "),
+            role="admin",
+        )
+    except ValidationError as exc:
+        errors = exc.errors(include_input=False, include_context=False, include_url=False)
+        details = "; ".join(
+            f"{'.'.join(map(str, error['loc']))}: {error['msg']}" for error in errors
+        )
+        raise SystemExit(f"Invalid administrator details: {details}") from None
     if getpass.getpass("Repeat password: ") != data.password:
         raise SystemExit("Passwords do not match")
     engine = make_engine(settings.database_url)
