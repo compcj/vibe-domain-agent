@@ -142,9 +142,13 @@ docker pull ghcr.io/compcj/vibe-domain-agent@sha256:<发布摘要>
 
 回滚先检查目标版本是否兼容当前数据库 schema；更换旧镜像不等于数据库回滚。兼容时恢复旧 digest 并重新启动；不兼容时在新部署中恢复升级前的联合备份，再切换入口。避免对仍有业务写入的库直接运行降级迁移。
 
-备份脚本暂停入口、API、Workers 和调度，联合保存 PostgreSQL（含检查点）、文件卷、环境密钥和镜像信息，随后恢复服务。文件权限为 600，默认保留 7 天；备份包含私密资料和解密密钥，离机存放前应加密。示例 systemd service/timer 位于 `deploy/`，修改部署路径后由运维启用每日任务。仅配置文件不会自动启用系统定时器。
+备份脚本检查正在运行的 API、Workers 和调度器使用同一镜像及密钥配置，再暂停这些服务与入口，联合保存 PostgreSQL（含检查点）、文件卷和实际生效的密钥，随后恢复服务。镜像以不可变 digest 与镜像 ID 记录在版本化 `recovery.json` 中；没有仓库 digest 的源码构建镜像会用 `docker save` 一并保存为 `application-image.tar`，恢复时加载并校验 ID。当前终端的 `APP_IMAGE` 或密钥覆盖值不会替代正在运行的值。辅助脚本从当前 `scripts/` 挂载到应用镜像执行，宿主机仅需 Docker Compose、Bash 和常用命令行工具。
 
-恢复到**全新的目录、Compose 项目和空卷**：安全解包可信备份，把 `config.env` 复制为 `.env`，保留其中密钥和原镜像 digest，设置独立 `COMPOSE_PROJECT_NAME`，运行 `bash scripts/restore.sh <解包目录> --confirm-empty-target`。恢复脚本拒绝非空数据库和文件卷；完成后核对会话、引用、待确认任务及外部业务结果。
+备份文件权限为 600，默认保留 7 天；备份包含私密资料和解密密钥，离机存放前应加密。源码镜像归档可能较大，请预留磁盘空间。示例 systemd service/timer 位于 `deploy/`，修改部署路径后由运维启用每日任务。仅配置文件不会自动启用系统定时器。
+
+恢复到**全新的目录、Compose 项目和空卷**：安全解包可信备份，把 `config.env` 复制为 `.env`，设置独立 `COMPOSE_PROJECT_NAME` 和目标端口，保持所需的 HTTPS `COMPOSE_FILE`，运行 `bash scripts/restore.sh <解包目录> --confirm-empty-target`。脚本先核验版本化清单、镜像 ID 与配置一致性，再启动目标数据库；缺少或不一致的元数据会拒绝恢复，不会自动采用 `latest`。没有 `recovery.json` 的旧备份需要人工核实原镜像与生效密钥，不能直接使用此自动恢复流程。
+
+恢复保留目标端口、项目名及 HTTPS 配置，强制使用备份中的镜像和有效密钥，不受当前 shell 的 `APP_IMAGE`、`SECRET_KEY`、`ENCRYPTION_KEY` 等覆盖值影响，并把恢复值保存到目标 `.env`。后续普通启动前清除旧的 shell 覆盖值，确保与恢复后的 `.env` 一致。脚本拒绝非空数据库和文件卷；完成后核对会话、引用、待确认任务及外部业务结果。
 
 ## 常见问题
 

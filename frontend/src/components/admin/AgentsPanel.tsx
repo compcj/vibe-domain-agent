@@ -466,6 +466,7 @@ function DebugAgent({
     return () => controller.abort();
   }, [run?.id]);
   async function start() {
+    if (busy) return;
     setBusy(true);
     setOutput("");
     setError("");

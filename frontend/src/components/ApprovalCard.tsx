@@ -63,6 +63,7 @@ export function ApprovalCard({
       ) : (
         <div className="approval-actions">
           <button
+            type="button"
             className="button primary"
             disabled={busy || expired}
             onClick={() => void decide(true)}
@@ -70,6 +71,7 @@ export function ApprovalCard({
             确认执行
           </button>
           <button
+            type="button"
             className="button secondary"
             disabled={busy || expired}
             onClick={() => void decide(false)}

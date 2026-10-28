@@ -25,3 +25,7 @@ logs
 frontend/dist
 frontend/test-results
 frontend/playwright-report
+
+# Private recovery output, including a custom BACKUP_DIR inside the checkout.
+**/.vda-backup.*
+**/vda-????????T??????Z.tar.gz

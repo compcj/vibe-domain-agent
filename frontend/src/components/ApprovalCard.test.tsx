@@ -52,3 +52,36 @@ describe("write confirmation", () => {
     expect(screen.getByText("确认已过期")).toBeInTheDocument();
   });
 });
+
+it.each([
+  ["确认执行", true],
+  ["拒绝", false],
+] as const)(
+  "%s only decides and never submits an enclosing debug form",
+  async (label, approved) => {
+    const start = vi.fn();
+    const decide = vi.fn(async () => {});
+    render(
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          start();
+        }}
+      >
+        <ApprovalCard
+          approval={{
+            id: "business",
+            title: "写入",
+            summary: "确认操作",
+            parameters: {},
+            expires_at: "2099-01-01T00:00:00Z",
+          }}
+          onDecide={decide}
+        />
+      </form>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: label }));
+    await waitFor(() => expect(decide).toHaveBeenCalledWith("business", approved));
+    expect(start).not.toHaveBeenCalled();
+  },
+);

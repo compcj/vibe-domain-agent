@@ -208,6 +208,7 @@ function Documents({
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Citation[] | null>(null);
   const [busy, setBusy] = useState(false);
+  const [uploadError, setUploadError] = useState("");
   const processing = resource.data.some((doc) =>
     ["queued", "processing", "indexing"].includes(doc.status),
   );
@@ -219,6 +220,7 @@ function Documents({
   async function add(files: FileList | null) {
     if (!files?.length) return;
     setBusy(true);
+    setUploadError("");
     try {
       for (const file of Array.from(files)) {
         if (file.size > 20 * 1024 * 1024)
@@ -230,10 +232,10 @@ function Documents({
           body: form,
         });
       }
-      await resource.reload();
     } catch (failure) {
-      resource.setError(errorMessage(failure));
+      setUploadError(errorMessage(failure));
     } finally {
+      await resource.reload();
       setBusy(false);
       if (upload.current) upload.current.value = "";
     }
@@ -291,9 +293,9 @@ function Documents({
           <Upload size={16} />
           {busy ? "处理中…" : "上传文档"}
         </button>
-        {resource.error && (
+        {(uploadError || resource.error) && (
           <p className="error" role="alert">
-            {resource.error}
+            {uploadError || resource.error}
           </p>
         )}
         <div className="document-list">
