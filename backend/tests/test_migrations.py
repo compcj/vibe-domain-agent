@@ -1,5 +1,7 @@
+import os
 from pathlib import Path
 
+import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import inspect
@@ -117,3 +119,156 @@ def test_provenance_backfill_bounds_fetches_and_inserts_without_losing_pairs():
             assert sum(inserts) == 1201 and len(inserts) >= 3
     finally:
         engine.dispose()
+
+
+@pytest.mark.parametrize("database", ["sqlite", "postgres"])
+def test_populated_provenance_upgrade_across_batches(tmp_path, database):
+    from datetime import UTC, datetime
+    from uuid import uuid4
+
+    from app.db import make_engine
+    from app.knowledge.models import RunSource
+    from app.models import Agent, Citation, Conversation, Run, User
+    from sqlalchemy import event, select, text
+    from sqlalchemy.engine import Engine, make_url
+    from sqlalchemy.orm import Session
+    from sqlalchemy.schema import CreateSchema, DropSchema
+
+    if database == "postgres" and not os.getenv("TEST_POSTGRES_URL"):
+        pytest.skip("TEST_POSTGRES_URL is not configured")
+    base = engine = None
+    schema = None
+    url = None
+    streamed_cursors = []
+
+    def observe_backfill(connection, cursor, statement, parameters, context, executemany):
+        # Alembic creates its own engine, so observe only this test's isolated URL.
+        if connection.engine.url == url and statement.startswith("SELECT r.id AS run_id"):
+            streamed_cursors.append(getattr(cursor, "name", None))
+
+    event.listen(Engine, "before_cursor_execute", observe_backfill)
+    try:
+        if database == "postgres":
+            base = make_engine(os.environ["TEST_POSTGRES_URL"])
+            candidate = "backfill_test_" + uuid4().hex
+            with base.begin() as connection:
+                connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public"))
+                connection.execute(CreateSchema(candidate))
+            schema = candidate
+            url = make_url(os.environ["TEST_POSTGRES_URL"])
+            url = url.set(
+                query={
+                    **url.query,
+                    "options": f"-csearch_path={schema},public -clock_timeout=5s -cstatement_timeout=30s",
+                }
+            )
+        else:
+            url = make_url(f"sqlite:///{tmp_path / 'populated.db'}")
+        config = Config("alembic.ini")
+        config.set_main_option(
+            "sqlalchemy.url", url.render_as_string(hide_password=False).replace("%", "%%")
+        )
+        command.upgrade(config, "0670a71142ff")
+        engine = make_engine(url.render_as_string(hide_password=False))
+        assert "run_sources" not in inspect(engine).get_table_names()
+        origin_time = datetime(2026, 1, 1, tzinfo=UTC)
+        citation_time = datetime(2026, 1, 15, tzinfo=UTC)
+        target_time = datetime(2026, 2, 1, tzinfo=UTC)
+        with Session(engine) as db:
+            user = User(email="backfill@example.test", display_name="Test", password_hash="unused")
+            agent = Agent(name="Backfill", draft={})
+            db.add_all([user, agent])
+            db.flush()
+            chat = Conversation(owner_id=user.id, agent_id=agent.id)
+            other_chat = Conversation(owner_id=user.id, agent_id=agent.id)
+            db.add_all([chat, other_chat])
+            db.flush()
+            origin = Run(
+                owner_id=user.id,
+                conversation_id=chat.id,
+                snapshot={},
+                status="completed",
+                created_at=origin_time,
+            )
+            target = Run(
+                owner_id=user.id,
+                conversation_id=chat.id,
+                snapshot={},
+                status="awaiting_confirmation",
+                created_at=target_time,
+            )
+            other = Run(
+                owner_id=user.id,
+                conversation_id=other_chat.id,
+                snapshot={},
+                status="completed",
+                created_at=origin_time,
+            )
+            db.add_all([origin, target, other])
+            db.flush()
+            # Tombstones remain conservative provenance even without a live document.
+            values = [(f"prior-{i}", origin, citation_time) for i in range(1201)]
+            values += [
+                ("own-run", target, citation_time),
+                ("equal-time", origin, target_time),
+                ("future", origin, datetime(2026, 3, 1, tzinfo=UTC)),
+                ("other-chat", other, citation_time),
+            ]
+            db.add_all(
+                [
+                    Citation(
+                        id=identifier,
+                        owner_id=user.id,
+                        conversation_id=run.conversation_id,
+                        run_id=run.id,
+                        document_id=None,
+                        revision=1,
+                        title="Synthetic source",
+                        locator="",
+                        excerpt="",
+                        created_at=created_at,
+                    )
+                    for identifier, run, created_at in values
+                ]
+            )
+            target_id = target.id
+            db.commit()
+        command.upgrade(config, "head")
+        with engine.connect() as connection:
+            actual = connection.execute(
+                select(
+                    RunSource.run_id,
+                    RunSource.citation_id,
+                    RunSource.created_at,
+                )
+            )
+            assert {(rid, cid, created.replace(tzinfo=UTC)) for rid, cid, created in actual} == {
+                (target_id, f"prior-{i}", target_time) for i in range(1201)
+            }
+            assert (
+                connection.scalar(text("SELECT version_num FROM alembic_version")) == "3b9e2f8174ac"
+            )
+            if database == "postgres":
+                assert len(streamed_cursors) == 1 and streamed_cursors[0], (
+                    "Populated PostgreSQL backfill must exercise a real server cursor"
+                )
+                assert (
+                    connection.scalar(
+                        text(
+                            "SELECT n.nspname FROM pg_extension e JOIN pg_namespace n "
+                            "ON n.oid = e.extnamespace WHERE e.extname = 'vector'"
+                        )
+                    )
+                    == "public"
+                )
+    finally:
+        event.remove(Engine, "before_cursor_execute", observe_backfill)
+        if engine is not None:
+            engine.dispose()
+        if base is not None:
+            try:
+                if schema is not None:
+                    with base.begin() as connection:
+                        connection.execute(DropSchema(schema, cascade=True))
+            finally:
+                base.dispose()
