@@ -18,10 +18,8 @@ jobs:
     env:
       IMAGE: ${{ inputs.image }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-      - name: Anonymous pull and startup verification
+      - name: Anonymous pull and source resolution
+        id: image
         run: |
           set -euo pipefail
           [[ "$IMAGE" =~ ^ghcr.io/compcj/vibe-domain-agent(:latest|:sha-[a-f0-9]{40}|@sha256:[a-f0-9]{64})$ ]]
@@ -31,10 +29,24 @@ jobs:
           revision="$(docker image inspect "$IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
           [[ "$revision" =~ ^[a-f0-9]{40}$ ]]
           digest="$(docker image inspect "$IMAGE" --format '{{index .RepoDigests 0}}')"
-          bash scripts/image-smoke.sh "$digest" "$revision"
+          [[ "$digest" =~ ^ghcr.io/compcj/vibe-domain-agent@sha256:[a-f0-9]{64}$ ]]
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ steps.image.outputs.revision }}
+          persist-credentials: false
+      - name: Verify using the image's matching source
+        env:
+          REVISION: ${{ steps.image.outputs.revision }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          export DOCKER_CONFIG="$RUNNER_TEMP/anonymous-docker-config"
+          bash scripts/image-smoke.sh "$DIGEST" "$REVISION"
           {
             echo '## Anonymous GHCR validation passed'
-            echo "- Image: \`$digest\`"
-            echo "- Source: \`$revision\`"
+            echo "- Image: \`$DIGEST\`"
+            echo "- Source: \`$REVISION\`"
             echo '- Used an empty Docker configuration with no registry login.'
           } >> "$GITHUB_STEP_SUMMARY"
