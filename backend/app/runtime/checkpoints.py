@@ -1,6 +1,7 @@
 import sqlite3
 from contextlib import closing, contextmanager
 from pathlib import Path
+from urllib.parse import quote, urlencode
 
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.checkpoint.sqlite import SqliteSaver
@@ -13,11 +14,31 @@ class CheckpointSchemaError(RuntimeError):
 
 
 def postgres_connection_url(url):
-    return (
-        url.set(drivername="postgresql")
-        .update_query_dict({"connect_timeout": "10"})
-        .render_as_string(hide_password=False)
-    )
+    # SQLAlchemy URLs use form-encoded query strings (+ for spaces). libpq URIs
+    # require percent-encoding, including in credentials, and treat + literally.
+    authority = ""
+    if url.username is not None:
+        authority = quote(url.username, safe="")
+        if url.password is not None:
+            authority += ":" + quote(str(url.password), safe="")
+        authority += "@"
+    host = url.host or ""
+    authority += "[" + host + "]" if ":" in host else quote(host, safe="")
+    if url.port is not None:
+        authority += ":" + str(url.port)
+    query = urlencode({**url.query, "connect_timeout": "10"}, doseq=True, quote_via=quote)
+    return "postgresql://" + authority + "/" + quote(url.database or "", safe="") + "?" + query
+
+
+def safe_sqlstate(error):
+    code = error.sqlstate
+    if (
+        isinstance(code, str)
+        and len(code) == 5
+        and all(char in "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ" for char in code)
+    ):
+        return code
+    return "unavailable"
 
 
 def initialize_checkpoints(settings):
@@ -38,9 +59,10 @@ def initialize_checkpoints(settings):
                 saver.setup()
             finally:
                 saver.conn.execute("SELECT pg_advisory_unlock(742921601)")
-    except PostgresError:
+    except PostgresError as error:
         raise CheckpointSchemaError(
-            "PostgreSQL checkpoint initialization failed; stop conflicting database activity "
+            f"PostgreSQL checkpoint initialization failed (SQLSTATE {safe_sqlstate(error)}); "
+            "stop conflicting database activity "
             "and rerun python -m app.cli migrate before starting API or workers"
         ) from None
 
@@ -57,8 +79,8 @@ def require_postgres_schema(saver):
             "to_regclass('checkpoint_blobs') AS checkpoint_blobs, "
             "to_regclass('checkpoint_writes') AS checkpoint_writes"
         ).fetchone()
-    except PostgresError:
-        raise CheckpointSchemaError(message) from None
+    except PostgresError as error:
+        raise CheckpointSchemaError(f"{message} (SQLSTATE {safe_sqlstate(error)})") from None
     if (
         not row
         or row["version"] != len(PostgresSaver.MIGRATIONS) - 1

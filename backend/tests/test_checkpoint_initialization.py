@@ -113,3 +113,64 @@ def test_migrate_initializes_checkpoints_after_application_schema(tmp_path, monk
     monkeypatch.setattr("sys.argv", ["app.cli", "migrate"])
     cli.main()
     assert initialized == [True]
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        "-csearch_path=runtime_test -clock_timeout=5s -cstatement_timeout=30s",
+        "-csearch_path=runtime+test -capplication_name=test+worker",
+    ],
+)
+@pytest.mark.parametrize("password", ["test+password", "test+ password/@?%"])
+@pytest.mark.parametrize("host", ["localhost", "::1"])
+def test_postgres_uri_roundtrip_preserves_options_and_credentials(options, password, host):
+    from psycopg.conninfo import conninfo_to_dict
+    from sqlalchemy.engine import URL
+
+    original = URL.create(
+        "postgresql+psycopg",
+        username="test+user",
+        password=password,
+        host=host,
+        port=5432,
+        database="test_db",
+        query={"options": options, "application_name": "runtime+worker name"},
+    )
+    # Test the persisted SQLAlchemy settings URL -> SDK/libpq URI boundary.
+    parsed_url = checkpoints.make_url(original.render_as_string(hide_password=False))
+    parsed = conninfo_to_dict(checkpoints.postgres_connection_url(parsed_url))
+    assert parsed["options"] == options
+    assert parsed["application_name"] == "runtime+worker name"
+    assert parsed["user"] == "test+user"
+    assert parsed["password"] == password
+    assert parsed["host"] == host
+    assert parsed["port"] == "5432"
+    assert parsed["dbname"] == "test_db"
+    assert parsed["connect_timeout"] == "10"
+
+
+def test_initialization_error_reports_sqlstate_without_driver_details(postgres_saver):
+    saver, _, settings = postgres_saver
+    saver.blocked = True
+    with pytest.raises(RuntimeError, match="SQLSTATE 55P03") as error:
+        checkpoints.initialize_checkpoints(settings)
+    assert "private database details" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "code,expected", [(None, "unavailable"), ("private-details", "unavailable"), ("42P01", "42P01")]
+)
+def test_sqlstate_diagnostic_only_accepts_five_ascii_code_characters(code, expected):
+    assert checkpoints.safe_sqlstate(SimpleNamespace(sqlstate=code)) == expected
+
+
+def test_postgres_uri_roundtrip_preserves_socket_host_query():
+    from psycopg.conninfo import conninfo_to_dict
+    from sqlalchemy.engine import make_url
+
+    original = make_url("postgresql+psycopg:///test_db?host=%2Ftmp&port=5432")
+    parsed = conninfo_to_dict(checkpoints.postgres_connection_url(original))
+    assert parsed["host"] == "/tmp"
+    assert parsed["port"] == "5432"
+    assert parsed["dbname"] == "test_db"
