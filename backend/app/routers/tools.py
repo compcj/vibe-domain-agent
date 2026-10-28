@@ -20,7 +20,7 @@ from app.models import (
 )
 from app.routers.conversations import Member, dispatch
 from app.runtime.dto import Decision, RunAccepted
-from app.runtime.store import aware, event, finish, live_access
+from app.runtime.store import aware, event, finish, live_access, lock_run
 from app.runtime.tool_schemas import DiscoverInput, ResolveInput, ToolInput
 from app.runtime.tools import call_config, validate_frozen
 from app.runtime.transports import mcp_session
@@ -125,10 +125,9 @@ def decide(identifier: UUID, data: Decision, request: Request, db: DB, user: Mem
     if not approval:
         raise HTTPException(404, "Approval not found")
     # Serialize decisions for different approvals on the same run across workers.
-    run = db.scalar(
-        select(Run).where(Run.id == approval.run_id, Run.owner_id == user.id).with_for_update()
-    )
-    if not run:
+    run = lock_run(db, approval.run_id, worker=False)
+    db.refresh(approval)
+    if run.owner_id != user.id:
         raise HTTPException(404, "Resource not found")
     call = db.get(ToolCall, approval.tool_call_id)
     if approval.decision is not None:
@@ -198,6 +197,9 @@ def calls(db: DB, admin: Admin, status: str = "outcome_unknown"):
 @router.post("/admin/tool-calls/{identifier}/resolve")
 def resolve(identifier: UUID, data: ResolveInput, db: DB, admin: Admin):
     call = db.get(ToolCall, str(identifier))
+    if call:
+        run = lock_run(db, call.run_id, worker=False)
+        db.refresh(call)
     if not call or call.status != "outcome_unknown":
         raise HTTPException(409, "Tool call is not awaiting verification")
     changed = db.execute(

@@ -9,10 +9,10 @@ from jsonschema import Draft202012Validator
 from langgraph.types import interrupt
 from sqlalchemy import select, update
 
-from app.models import Approval, Run, ToolCall, ToolDefinition, User, new_id, utcnow
+from app.models import Approval, ToolCall, User, new_id, utcnow
 from app.runtime import budget
 from app.runtime.provider import SafeFailure
-from app.runtime.store import aware, event, finish, live_access
+from app.runtime.store import aware, event, finish, live_access, lock_run
 from app.runtime.transports import TransportFailure, invoke
 from app.security import audit, decrypt_secret
 
@@ -34,7 +34,7 @@ def validate_frozen(call):
 
 def plan_calls(state, run_id, calls):
     with state.session_factory() as db:
-        run = db.get(Run, run_id)
+        run = lock_run(db, run_id)
         live_access(db, run)
         for raw in calls:
             try:
@@ -96,7 +96,7 @@ def approval_payload(config, call, approval):
 def approval_gate(state, run_id, calls):
     # This node is replayed on Command(resume=...). Never perform side effects here.
     with state.session_factory() as db:
-        run = db.get(Run, run_id)
+        run = lock_run(db, run_id)
         live_access(db, run)
         approvals = db.scalars(select(Approval).where(Approval.run_id == run_id)).all()
         pending = False
@@ -132,7 +132,7 @@ def execute_calls(state, run_id, calls):
         budget.heartbeat(state, run_id)
         budget.check()
         with state.session_factory() as db:
-            run = db.get(Run, run_id)
+            run = lock_run(db, run_id)
             if run.cancel_requested:
                 raise SafeFailure("Run cancelled")
             call = db.scalar(
@@ -177,10 +177,11 @@ def execute_calls(state, run_id, calls):
                     continue
                 if approval.decision is not True:
                     raise SafeFailure("Confirmation is required")
-            tool = db.get(ToolDefinition, call.tool_id)
+            if "headers_encrypted" not in config:
+                raise SafeFailure("Run credential binding is unavailable; start a new request")
             headers = (
-                json.loads(decrypt_secret(tool.headers_encrypted, state.settings))
-                if tool.headers_encrypted
+                json.loads(decrypt_secret(config["headers_encrypted"], state.settings))
+                if config["headers_encrypted"]
                 else {}
             )
             claimed = db.execute(
@@ -213,7 +214,10 @@ def execute_calls(state, run_id, calls):
                 else "Tool service unavailable; you may answer without this result."
             )
         with state.session_factory() as db:
-            call, run = db.get(ToolCall, call_id), db.get(Run, run_id)
+            run = lock_run(db, run_id)
+            call = db.get(ToolCall, call_id)
+            if call.status != "submitted" or call.resolved_by:
+                raise SafeFailure("Tool call is no longer owned by this execution")
             call.status, call.result = status, result
             audit(db, None, "tool_" + status, "tool_call", call_id)
             if status == "outcome_unknown":

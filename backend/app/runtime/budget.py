@@ -4,6 +4,7 @@ import time
 from contextvars import ContextVar
 
 deadline = ContextVar("run_deadline", default=None)
+run_id = ContextVar("run_id", default=None)
 lease_token = ContextVar("run_lease_token", default=None)
 
 
@@ -34,17 +35,27 @@ def heartbeat(state, run_id, force=False):
     if not token or previous is None or (not force and now - previous < 5):
         return
     with state.session_factory() as db:
-        changed = db.execute(
+        cancelled = db.execute(
             update(Run)
-            .where(Run.id == run_id, Run.lease_token == token)
+            .where(
+                Run.id == run_id,
+                Run.lease_token == token,
+                Run.lease_expires_at > utcnow(),
+                Run.status.in_(["running", "awaiting_confirmation"]),
+            )
             .values(
                 elapsed_seconds=Run.elapsed_seconds + now - previous,
                 lease_expires_at=utcnow() + timedelta(seconds=90),
             )
-        ).rowcount
+            .returning(Run.cancel_requested)
+        ).scalar_one_or_none()
         db.commit()
-    if not changed:
+    if cancelled is None:
         from app.runtime.provider import SafeFailure
 
         raise SafeFailure("Execution lease is no longer valid")
     accounted_at.set(now)
+    if cancelled:
+        from app.runtime.provider import SafeFailure
+
+        raise SafeFailure("Run cancelled")

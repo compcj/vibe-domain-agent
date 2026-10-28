@@ -12,7 +12,7 @@ from app.runtime import budget
 from app.runtime.checkpoints import checkpointer
 from app.runtime.dto import CitationRead
 from app.runtime.provider import SafeFailure, stream_completion
-from app.runtime.store import TERMINAL, event, finish, live_access
+from app.runtime.store import TERMINAL, event, finish, live_access, lock_run
 
 
 class GraphState(TypedDict):
@@ -34,7 +34,7 @@ def build_graph(state, run_id, saver):
 
     def model_node(graph):
         with state.session_factory() as db:
-            run = db.get(Run, run_id)
+            run = lock_run(db, run_id)
             check_budget(db, run)
             run.steps += 1
             tools = []
@@ -105,6 +105,7 @@ def execute(state, run_id, resume=False):
                 Run.id == run_id,
                 Run.status.in_(["queued", "resume_queued"]),
                 Run.lease_token.is_(None),
+                Run.cancel_requested.is_(False),
             )
             .values(
                 status="running",
@@ -119,10 +120,11 @@ def execute(state, run_id, resume=False):
     started = time.monotonic()
     deadline_context = budget.deadline.set(started + allowance)
     lease_context = budget.lease_token.set(token)
+    run_context = budget.run_id.set(run_id)
     accounted_context = budget.accounted_at.set(started)
     try:
         with state.session_factory() as db:
-            run = db.get(Run, run_id)
+            run = lock_run(db, run_id)
             live_access(db, run)
             if run.cancel_requested:
                 raise SafeFailure("Run cancelled")
@@ -175,7 +177,7 @@ def execute(state, run_id, resume=False):
             if result.get("__interrupt__"):
                 return
             with state.session_factory() as db:
-                run = db.get(Run, run_id)
+                run = lock_run(db, run_id)
                 if run.status in TERMINAL:
                     return
                 answer = result["messages"][-1].get("content", "")
@@ -205,6 +207,7 @@ def execute(state, run_id, resume=False):
         budget.accounted_at.reset(accounted_context)
         budget.deadline.reset(deadline_context)
         budget.lease_token.reset(lease_context)
+        budget.run_id.reset(run_context)
         try:
             state.execution_slots.release(owner_id, token)
         except Exception:
@@ -212,20 +215,22 @@ def execute(state, run_id, resume=False):
         with state.session_factory() as db:
             db.execute(
                 update(Run)
-                .where(Run.id == run_id)
-                .values(elapsed_seconds=Run.elapsed_seconds + unaccounted)
-            )
-            db.execute(
-                update(Run)
-                .where(Run.id == run_id, Run.lease_token == token)
-                .values(lease_token=None, lease_expires_at=None)
+                .where(Run.id == run_id, Run.lease_token == token, Run.lease_expires_at > utcnow())
+                .values(
+                    elapsed_seconds=Run.elapsed_seconds + unaccounted,
+                    lease_token=None,
+                    lease_expires_at=None,
+                )
             )
             db.commit()
 
 
 def fail_execution(state, run_id, token, error):
     with state.session_factory() as db:
-        run = db.get(Run, run_id)
+        try:
+            run = lock_run(db, run_id)
+        except SafeFailure:
+            return
         if not run or run.status in TERMINAL or run.lease_token != token:
             return
         submitted = db.scalars(

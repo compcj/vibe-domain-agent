@@ -2,68 +2,80 @@
 
 from datetime import timedelta
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, or_, select, update
 
 from app.models import Approval, AuditEvent, Run, RunEvent, ToolCall, utcnow
-from app.runtime.store import finish
+from app.runtime.store import aware, finish, lock_run
 
 
 def recover(state):
     enqueue = []
+    expired, stale = [], []
     with state.session_factory() as db:
         now = utcnow()
-        expired = db.scalars(
-            select(Run).where(
-                Run.status == "awaiting_confirmation",
-                Run.id.in_(
-                    select(Approval.run_id).where(
-                        Approval.expires_at <= now, Approval.decision.is_(None)
+        candidates = list(
+            db.scalars(
+                select(Run.id)
+                .where(
+                    or_(
+                        Run.status.in_(["running", "resume_queued", "awaiting_confirmation"]),
+                        Run.id.in_(select(ToolCall.run_id).where(ToolCall.status == "submitted")),
                     )
-                ),
+                )
+                .order_by(Run.id)
             )
-        ).all()
-        for run in expired:
-            db.execute(
-                update(ToolCall)
-                .where(ToolCall.run_id == run.id, ToolCall.status == "planned")
-                .values(status="expired")
-            )
-            finish(db, run, "expired", "Confirmation expired")
-        stale = db.scalars(
-            select(Run)
-            .where(
-                Run.status.in_(["running", "resume_queued", "awaiting_confirmation"]),
-                Run.lease_expires_at <= now,
-            )
-            .with_for_update(skip_locked=True)
-        ).all()
-        for run in stale:
-            if run.status == "awaiting_confirmation":
-                run.lease_token = None
-                run.lease_expires_at = None
+        )
+        for run_id in candidates:
+            run = lock_run(db, run_id, worker=False)
+            # Re-read under the same lock used by claim, cancellation and results.
+            lease_alive = run.lease_expires_at and aware(run.lease_expires_at) > now
+            if lease_alive:
                 continue
             submitted = db.scalars(
                 select(ToolCall).where(ToolCall.run_id == run.id, ToolCall.status == "submitted")
             ).all()
-            uncertain = False
+            uncertain = any(call.effect == "write" for call in submitted)
             for call in submitted:
-                if call.effect == "write":
-                    call.status = "outcome_unknown"
-                    uncertain = True
-                else:
-                    call.status, call.result = "failed", "Read interrupted; no result available."
+                call.status = "outcome_unknown" if call.effect == "write" else "failed"
+                if call.effect != "write":
+                    call.result = "Read interrupted; no result available."
             if uncertain:
+                stale.append(run.id)
                 finish(
                     db, run, "outcome_unknown", "Tool outcome requires administrator verification"
                 )
-            elif run.cancel_requested:
-                finish(db, run, "cancelled")
-            else:
-                # Time spent before a worker crash counts against the active budget.
-                run.elapsed_seconds += 90
-                run.status = "resume_queued"
-                run.lease_token = None
-                run.lease_expires_at = None
+                continue
+            expired_approval = db.scalar(
+                select(Approval.id)
+                .where(
+                    Approval.run_id == run.id,
+                    Approval.expires_at <= now,
+                    Approval.decision.is_(None),
+                )
+                .limit(1)
+            )
+            if run.status == "awaiting_confirmation" and expired_approval:
+                expired.append(run.id)
+                db.execute(
+                    update(ToolCall)
+                    .where(ToolCall.run_id == run.id, ToolCall.status == "planned")
+                    .values(status="expired")
+                )
+                finish(db, run, "expired", "Confirmation expired")
+            elif run.lease_expires_at and run.status in {
+                "running",
+                "resume_queued",
+                "awaiting_confirmation",
+            }:
+                stale.append(run.id)
+                if run.cancel_requested:
+                    finish(db, run, "cancelled")
+                else:
+                    if run.status != "awaiting_confirmation":
+                        run.elapsed_seconds += 90
+                        run.status = "resume_queued"
+                    run.lease_token = None
+                    run.lease_expires_at = None
         db.commit()
         # A DB run is a durable outbox. Redis dispatch outages are recovered here.
         enqueue = [

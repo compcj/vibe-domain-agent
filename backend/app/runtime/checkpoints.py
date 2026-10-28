@@ -1,5 +1,5 @@
 import sqlite3
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 from langgraph.checkpoint.postgres import PostgresSaver
@@ -12,7 +12,7 @@ def checkpointer(state):
     url = make_url(state.settings.database_url)
     if url.get_backend_name() == "sqlite":
         path = Path(url.database).with_suffix(".checkpoints.db")
-        with sqlite3.connect(str(path), check_same_thread=False, timeout=30) as connection:
+        with closing(sqlite3.connect(str(path), check_same_thread=False, timeout=30)) as connection:
             saver = SqliteSaver(connection)
             saver.setup()
             yield saver

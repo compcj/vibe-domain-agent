@@ -9,6 +9,8 @@ import httpx
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
+from app.runtime import budget
+
 MAX_RESULT = 64000
 
 
@@ -28,24 +30,25 @@ def safe_text(value, headers):
     return text
 
 
-def http_call(state, config, arguments, headers, key):
+async def http_call(state, config, arguments, headers, key):
     headers = dict(headers)
     if config["idempotency_header"]:
         headers[config["idempotency_header"]] = key
-    with httpx.Client(
+    async with httpx.AsyncClient(
         timeout=config["timeout_seconds"],
         follow_redirects=False,
         trust_env=False,
         transport=getattr(state, "http_transport", None),
     ) as client:
         kwargs = {"params": arguments} if config["method"] == "GET" else {"json": arguments}
-        with client.stream(
+        async with client.stream(
             config["method"], config["endpoint"], headers=headers, **kwargs
         ) as response:
             if not 200 <= response.status_code < 300:
                 raise TransportFailure()
             chunks, size = [], 0
-            for chunk in response.iter_bytes():
+            async for chunk in response.aiter_bytes():
+                budget.check()
                 size += len(chunk)
                 if size > MAX_RESULT:
                     raise TransportFailure()
@@ -113,18 +116,52 @@ async def mcp_session(endpoint, headers, timeout, name=None, arguments=None):
                     return safe_text(result.model_dump(mode="json"), headers)
 
 
-def invoke(state, config, arguments, headers, key):
+HEARTBEAT_INTERVAL = 1.0
+
+
+async def supervised(state, operation, timeout, accounting):
+    """Cancel and await network I/O on timeout/fence loss; never orphan a write thread."""
+    task = None
     try:
-        if config["transport"] == "http":
-            return http_call(state, config, arguments, headers, key)
-        return asyncio.run(
-            mcp_session(
+        async with asyncio.timeout(min(timeout, budget.remaining())):
+            while True:
+                budget.check()
+                if budget.run_id.get():
+                    budget.heartbeat(state, budget.run_id.get(), force=True)
+                    accounting["at"] = budget.accounted_at.get()
+                if task is None:
+                    task = asyncio.create_task(operation())
+                done, _ = await asyncio.wait({task}, timeout=HEARTBEAT_INTERVAL)
+                if done:
+                    return task.result()
+    finally:
+        accounting["at"] = budget.accounted_at.get()
+        if task is not None:
+            if not task.done():
+                task.cancel()
+            # AsyncClient and MCP contexts close before the caller can finish/recover.
+            await asyncio.gather(task, return_exceptions=True)
+
+
+def invoke(state, config, arguments, headers, key):
+    accounting = {}
+    try:
+
+        def operation():
+            if config["transport"] == "http":
+                return http_call(state, config, arguments, headers, key)
+            return mcp_session(
                 config["endpoint"],
                 headers,
                 config["timeout_seconds"],
                 config["mcp_tool_name"],
                 arguments,
             )
-        )
+
+        return asyncio.run(supervised(state, operation, config["timeout_seconds"], accounting))
     except Exception:
         raise TransportFailure() from None
+    finally:
+        # asyncio task contexts do not propagate ContextVar changes to the caller.
+        if accounting.get("at") is not None:
+            budget.accounted_at.set(accounting["at"])

@@ -18,7 +18,7 @@ from app.runtime.dto import (
     RunInput,
     RunRead,
 )
-from app.runtime.store import TERMINAL, create_run, finish, owned
+from app.runtime.store import TERMINAL, create_run, finish, lock_run, owned
 from app.security import audit
 
 router = APIRouter(tags=["conversations"])
@@ -150,9 +150,22 @@ def get_run(identifier: UUID, db: DB, user: CurrentUser):
 @router.post("/runs/{identifier}/cancel", response_model=RunAccepted)
 def cancel(identifier: UUID, db: DB, user: Member):
     run = owned(db, Run, identifier, user)
+    run = lock_run(db, run.id, worker=False)
     run.cancel_requested = True
-    if run.status not in TERMINAL and run.status != "running":
-        finish(db, run, "cancelled")
+    if run.status != "running":
+        uncertain = db.scalars(
+            select(ToolCall).where(
+                ToolCall.run_id == run.id,
+                ToolCall.effect == "write",
+                ToolCall.status.in_(["submitted", "outcome_unknown"]),
+            )
+        ).all()
+        if uncertain and run.status != "outcome_unknown":
+            for call in uncertain:
+                call.status = "outcome_unknown"
+            finish(db, run, "outcome_unknown", "Tool outcome requires administrator verification")
+        elif run.status not in TERMINAL:
+            finish(db, run, "cancelled")
     audit(db, user, "cancel", "run", run.id)
     db.commit()
     return {"id": run.id, "status": run.status}

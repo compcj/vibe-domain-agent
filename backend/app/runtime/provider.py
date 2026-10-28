@@ -5,9 +5,8 @@ import json
 
 import httpx
 
-from app.models import ModelConnection
 from app.runtime import budget
-from app.runtime.store import event, live_access
+from app.runtime.store import event, live_access, lock_run
 from app.security import decrypt_secret
 
 MAX_CONTEXT = 200_000
@@ -21,15 +20,15 @@ class SafeFailure(Exception):
 def stream_completion(state, run_id, messages, tools):
     budget.check()
     with state.session_factory() as db:
-        from app.models import Run
-
-        run = db.get(Run, run_id)
+        run = lock_run(db, run_id)
         live_access(db, run)
         config = run.snapshot
-        model = db.get(ModelConnection, config["model_id"])
+        model = config["model"]
+        if "api_key_encrypted" not in model:
+            raise SafeFailure("Run credential binding is unavailable; start a new request")
         key = (
-            decrypt_secret(model.api_key_encrypted, state.settings)
-            if model.api_key_encrypted
+            decrypt_secret(model["api_key_encrypted"], state.settings)
+            if model["api_key_encrypted"]
             else ""
         )
     if len(json.dumps(messages)) > MAX_CONTEXT:
@@ -63,14 +62,14 @@ def stream_completion(state, run_id, messages, tools):
                 if response.status_code != 200:
                     raise SafeFailure("Model service is unavailable")
                 total = 0
-                for line in bounded_lines(response):
+                for line in bounded_lines(response, state, run_id):
                     budget.heartbeat(state, run_id)
                     budget.check()
                     total += len(line)
                     if total > MAX_OUTPUT * 8:
                         raise SafeFailure("Model response exceeds the size limit")
                     with state.session_factory() as db:
-                        run = db.get(Run, run_id)
+                        run = lock_run(db, run_id)
                         if run.cancel_requested:
                             raise SafeFailure("Run cancelled")
                         live_access(db, run)
@@ -123,7 +122,7 @@ def stream_completion(state, run_id, messages, tools):
         raise SafeFailure("Model returned sensitive connector data")
     if usage:
         with state.session_factory() as db:
-            run = db.get(Run, run_id)
+            run = lock_run(db, run_id)
             for source, field in (
                 ("prompt_tokens", "input_tokens"),
                 ("completion_tokens", "output_tokens"),
@@ -138,10 +137,11 @@ def stream_completion(state, run_id, messages, tools):
     return result
 
 
-def bounded_lines(response):
+def bounded_lines(response, state, run_id):
     decoder = codecs.getincrementaldecoder("utf-8")()
     pending, total = "", 0
     for chunk in response.iter_bytes():
+        budget.heartbeat(state, run_id)
         budget.check()
         total += len(chunk)
         if total > MAX_OUTPUT * 8:

@@ -2,7 +2,7 @@ import copy
 from datetime import UTC
 
 from fastapi import HTTPException
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from app.dependencies import can_use_agent
 from app.models import (
@@ -34,8 +34,49 @@ def owned(db, cls, identifier, user):
     return obj
 
 
+def lock_run(db, run_id, *, worker=True):
+    """Lock before reading mutable state, including SQLite (which ignores FOR UPDATE).
+
+    Every ledger writer locks Run first. Retain the lock through the transaction;
+    never hold it while waiting on a remote service.
+    """
+    from app.runtime.budget import lease_token
+    from app.runtime.provider import SafeFailure
+
+    token = lease_token.get() if worker else None
+    marker = (run_id, token)
+    transaction = db.get_transaction()
+    if transaction is not None and db.info.get(marker) is transaction:
+        return db.get(Run, run_id)
+    predicates = [Run.id == run_id]
+    if token:
+        predicates += [
+            Run.lease_token == token,
+            Run.lease_expires_at > utcnow(),
+            Run.status.in_(["running", "awaiting_confirmation"]),
+        ]
+    with db.no_autoflush:
+        changed = db.execute(
+            update(Run)
+            .where(*predicates)
+            .values(next_event_seq=Run.next_event_seq)
+            .execution_options(synchronize_session=False)
+        ).rowcount
+        if not changed:
+            if token:
+                raise SafeFailure("Execution lease is no longer valid")
+            raise HTTPException(404, "Resource not found")
+        run = db.scalar(
+            select(Run).where(Run.id == run_id).execution_options(populate_existing=True)
+        )
+    db.info[marker] = db.get_transaction()
+    return run
+
+
 def event(db, run_id, kind, data):
     from app.runtime.dto import EVENT_SCHEMAS
+
+    lock_run(db, run_id)
 
     data = EVENT_SCHEMAS[kind].model_validate(data).model_dump(mode="json")
     seq = db.scalar(
@@ -48,6 +89,13 @@ def event(db, run_id, kind, data):
 
 
 def finish(db, run, status, error=None):
+    lock_run(db, run.id)
+    from app.runtime import budget
+
+    if budget.lease_token.get() and budget.accounted_at.get() is not None:
+        now = budget.time.monotonic()
+        run.elapsed_seconds += now - budget.accounted_at.get()
+        budget.accounted_at.set(now)
     run.status = status
     run.error = error
     run.finished_at = utcnow()
@@ -67,6 +115,8 @@ def live_access(db, run, tool_id=None):
     from app.runtime.budget import lease_token
 
     token = lease_token.get()
+    if token:
+        run = lock_run(db, run.id)
     if token and (
         run.lease_token != token
         or not run.lease_expires_at
@@ -103,7 +153,11 @@ def snapshot(db, agent, state, debug=False):
     )
     validate_publication(db, config, state)
     model = db.get(ModelConnection, config["model_id"])
-    config["model"] = {"base_url": model.base_url, "model": model.model}
+    config["model"] = {
+        "base_url": model.base_url,
+        "model": model.model,
+        "api_key_encrypted": model.api_key_encrypted,
+    }
     config["tools"] = []
     for tid in config.get("tool_ids", []):
         tool = db.get(ToolDefinition, tid)
@@ -117,6 +171,7 @@ def snapshot(db, agent, state, debug=False):
                     "description",
                     "transport",
                     "endpoint",
+                    "headers_encrypted",
                     "method",
                     "mcp_tool_name",
                     "input_schema",
