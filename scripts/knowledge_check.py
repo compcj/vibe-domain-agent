@@ -29,7 +29,7 @@ def answer(actor, agent, attachment=None, conversation=None):
 def run_knowledge_checks(admin, actors, agent, mock):
     owner, other = actors[:2]
     model = admin.request('POST', '/admin/models', json={
-        'name': 'Embedding simulator', 'kind': 'embedding', 'model': 'test-embedding', 'base_url': mock + '/v1',
+        'name': 'Embedding simulator', 'kind': 'embedding', 'model': 'test-embedding', 'base_url': mock + '/v1', 'api_key': 'synthetic-embedding-credential',
     })
     probe = admin.request('POST', '/admin/models/' + model['id'] + '/test')
     assert probe['ok'] and probe['capabilities']['embedding_dimensions'] == 4

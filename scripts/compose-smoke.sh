@@ -29,6 +29,10 @@ cd "$workspace/source"
 docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/output" "$image" python /app/scripts/configure.py --output /output/.env --development
 sed -i 's/^APP_ENV=development$/APP_ENV=test/' .env
 export COMPOSE_PROJECT_NAME="$project-source"
+# Deliberately differ from .env and include a literal dollar, proving backup captures
+# the effective running secrets and restore handles Compose interpolation correctly.
+export SECRET_KEY="smoke-$(openssl rand -hex 32)-\$literal"
+export ENCRYPTION_KEY="$(openssl rand -base64 32 | tr '+/' '-_')"
 docker compose up -d --wait --wait-timeout 180
 docker run -d --name "$project-mock" --network "$project-source"_default --network-alias mock -e APP_ENV=test "$image" python /app/scripts/mock_service.py >/dev/null
 for attempt in {1..30}; do
@@ -45,6 +49,10 @@ cp "$workspace/snapshot/config.env" .env
 export COMPOSE_PROJECT_NAME="$project-restored"
 docker compose up -d --wait db redis
 docker network connect --alias mock "$project-restored"_default "$project-mock"
+# These ambient overrides must not select another image or decrypt restored data.
+export APP_IMAGE=vda-unexpected:must-not-run
+export SECRET_KEY="wrong-$(openssl rand -hex 32)"
+export ENCRYPTION_KEY="$(openssl rand -base64 32 | tr '+/' '-_')"
 bash scripts/restore.sh "$workspace/snapshot" --confirm-empty-target
 docker compose exec -T api python /app/scripts/system_check.py --verify-restore
 echo 'Compose deployment and joint backup/restore smoke passed.'

@@ -55,11 +55,12 @@ def provision(mock):
     engine.dispose()
     admin = Actor(email, password)
     group = admin.request('POST', '/admin/groups', json={'name': 'Acceptance ' + uuid4().hex[:10]})
-    model = admin.request('POST', '/admin/models', json={'name': 'Simulator', 'kind': 'chat', 'model': 'test', 'base_url': mock + '/v1'})
+    model = admin.request('POST', '/admin/models', json={'name': 'Simulator', 'kind': 'chat', 'model': 'test', 'base_url': mock + '/v1', 'api_key': 'synthetic-model-credential'})
     tool = admin.request('POST', '/admin/tools', json={
         'name': 'record_event', 'title': 'Record business event', 'description': 'Record an event',
         'transport': 'http', 'endpoint': mock + '/business/record', 'effect': 'write', 'policy': 'confirm',
         'allowed_group_ids': [group['id']], 'idempotency_header': 'Idempotency-Key',
+        'headers': {'Authorization': 'Bearer synthetic-business-credential'},
         'input_schema': {'type': 'object', 'properties': {'object_id': {'type': 'string'}}, 'required': ['object_id'], 'additionalProperties': False},
     })
     agent = admin.request('POST', '/admin/agents', json={
