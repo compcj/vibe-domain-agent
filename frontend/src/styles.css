@@ -1203,6 +1203,16 @@ small {
   gap: 8px;
   margin-bottom: 9px;
 }
+.model-capabilities {
+  display: grid;
+  gap: 4px;
+  margin: 12px 0;
+  font-size: 11px;
+  color: #697963;
+}
+.model-capabilities small {
+  color: #8c9586;
+}
 .attachment {
   display: flex;
   align-items: center;

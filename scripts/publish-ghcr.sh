@@ -9,7 +9,7 @@ manifest_error="$(mktemp)"
 if docker manifest inspect "$tag" > /dev/null 2> "$manifest_error"; then
   echo 'Existing immutable SHA tag found; validating and reusing it.'
   docker pull "$tag"
-elif grep -Eqi 'manifest unknown|no such manifest|not found' "$manifest_error"; then
+elif grep -Eqi 'manifest unknown|no such manifest' "$manifest_error"; then
   docker tag vda:candidate "$tag"
   docker push "$tag"
 else

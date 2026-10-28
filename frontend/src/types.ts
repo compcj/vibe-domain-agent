@@ -69,6 +69,13 @@ export interface ModelConnection {
   model: string;
   enabled: boolean;
   has_api_key: boolean;
+  capabilities?: {
+    streaming?: boolean;
+    tool_calling?: boolean;
+    embedding?: boolean;
+    embedding_dimensions?: number;
+  } | null;
+  tested_at?: string | null;
 }
 export interface Draft {
   model_id: string;

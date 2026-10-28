@@ -12,6 +12,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import httpx
+from knowledge_check import run_knowledge_checks, verify_knowledge_restore
 
 
 class Actor:
@@ -128,6 +129,8 @@ def main():
             assert run['status'] == 'awaiting_confirmation'
             assert Path('/app/data/files/acceptance-sentinel.txt').read_text() == state['marker']
             assert actor.request('GET', '/conversations/' + state['conversation'])['id'] == state['conversation']
+            if 'knowledge' in state:
+                verify_knowledge_restore(actor, state['knowledge'])
             actor.request('POST', '/approvals/' + state['approval'] + '/decision', json={'approved': True})
             actor.wait(state['run'])
             counts = httpx.get(args.mock + '/business/counts', trust_env=False).json()
@@ -141,6 +144,7 @@ def main():
         controlled_write(actors[0], actors[1], agent, args.mock)
         with ThreadPoolExecutor(max_workers=10) as pool:
             list(pool.map(lambda actor: basic(actor, agent), actors))
+        knowledge_state = run_knowledge_checks(admin, actors, agent, args.mock)
         deadline = time.monotonic() + args.duration
 
         def load(actor):
@@ -160,7 +164,8 @@ def main():
         success = sum(value[0] for value in results)
         failed = sum(value[1] for value in results)
         report = {'concurrent_clients': 10, 'seconds': round(time.monotonic() - started, 2), 'successful_runs': success,
-                  'failed_runs': failed, 'error_rate': failed / max(1, success + failed), 'smoke_runs': 10, 'controlled_write_submissions': 1}
+                  'failed_runs': failed, 'error_rate': failed / max(1, success + failed), 'smoke_runs': 10,
+                  'controlled_write_submissions': 1, 'knowledge_and_file_checks': 'passed'}
         if args.report:
             args.report.write_text(json.dumps(report, indent=2), encoding='utf-8')
         print(json.dumps(report))
@@ -173,7 +178,8 @@ def main():
             run = actor.request('POST', '/conversations/' + conversation + '/runs', json={'message': 'WRITE ' + marker})
             waiting = actor.wait(run['id'], ('awaiting_confirmation',))
             restore_state.write_text(json.dumps({'email': actor.email, 'password': actor.password,
-                'conversation': conversation, 'run': run['id'], 'approval': waiting['approvals'][0]['id'], 'marker': marker}), encoding='utf-8')
+                'conversation': conversation, 'run': run['id'], 'approval': waiting['approvals'][0]['id'],
+                'marker': marker, 'knowledge': knowledge_state}), encoding='utf-8')
             Path('/app/data/files/acceptance-sentinel.txt').write_text(marker, encoding='utf-8')
             print('Prepared durable pending approval and file for joint restore validation.')
     finally:

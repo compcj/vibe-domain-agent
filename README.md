@@ -6,9 +6,9 @@
 
 ## 功能与边界
 
-已实现并有本地验证：独立账号登录、用户组及授权、模型连接、Agent 草稿/发布/回滚、成员门户与管理界面。对话运行时、工具确认和知识检索的集成验证正在进行。Docker/GHCR 首次发布结果会写入验证记录。
+已实现：独立账号、用户组及授权、模型与能力测试、Agent 草稿/调试/发布/回滚、多轮流式对话、HTTP/MCP 工具、业务确认、调用账本、审计和管理界面。基础镜像已完成手动 GHCR 发布、匿名拉取、容器启动和联合备份恢复。知识库、附件与引用已实现，正在进行独立审查和完整容器联调，详细证据见验证记录。
 
-首版目标支持文本型 PDF、DOCX、TXT、Markdown、CSV、XLSX；不支持扫描件 OCR、加密文件、宏执行、代码计算。工具通过管理员选择的 HTTP 或 MCP Streamable HTTP 服务连接，不运行 stdio 程序。组织服务账号决定业务数据范围，不继承成员在外部业务系统中的个人权限。
+文档解析支持文本型 PDF、DOCX、TXT、Markdown、CSV、XLSX；不支持扫描件 OCR、加密文件、宏执行、代码计算。文本和 CSV 使用 UTF-8，可含 BOM。工具通过管理员选择的 HTTP 或 MCP Streamable HTTP 服务连接，不运行 stdio 程序。组织服务账号决定业务数据范围，不继承成员在外部业务系统中的个人权限。
 
 OpenSandbox、企业 SSO、多租户、成员自行创建 Agent、可视化编排和跨会话长期记忆未提供。OpenSandbox 计划在首版之后接入，当前配置不能启用沙盒。
 
@@ -53,6 +53,8 @@ uv run celery -A app.worker.celery_app beat --loglevel=WARNING
 Celery 生产环境使用 Linux；Windows 开发可加 `--pool=solo` 单进程调试，完整并发与恢复测试在 Linux 运行。浏览器访问 `http://127.0.0.1:5173`。前端把 `/api` 与 `/health` 代理给 `127.0.0.1:8000`。
 
 管理员依次创建用户组和成员 → 模型连接 → 知识库/工具 → Agent 草稿 → 授权与调试 → 发布。Agent 和工具都需要单独授权。没有授权组时，管理员在成员门户也看不到对应 Agent。
+
+知识库文档同名上传会替换原版本并重新索引；旧引用随即失效。更换嵌入模型前先删除库内文档，更换后重新上传；修改服务端嵌入空间也需要重建索引。检索采用 pgvector 精确余弦排序，初始阈值和切分策略需结合业务资料评测。删除、替换资料或撤销授权后，依赖失效来源的历史助手回答会显示不可用，避免从历史消息和事件重放读取旧片段；成员原始提问保留。
 
 验证命令：
 
@@ -129,6 +131,8 @@ docker pull ghcr.io/compcj/vibe-domain-agent@sha256:<发布摘要>
 ```
 
 可手动运行 `gh workflow run verify-public.yml --repo compcj/vibe-domain-agent --ref main`，在空 Docker 凭据目录中匿名拉取，并检查迁移、API、前端和 Worker。该验证工作流不发布镜像。30 分钟模拟容量验证使用 `validate-load.yml`，结果写入 Actions Summary。
+
+两个已发布版本之间的升级和备份回滚验证使用 `verify-upgrade.yml`，输入前后镜像标签或 digest。工作流先固定两个 digest，在临时项目中迁移并恢复旧检查点，检查旧镜像能否识别新 schema，再把升级前备份恢复到新的空项目。模拟业务服务彼此隔离；真实外部系统在备份之后已发生的操作仍需人工核实。
 
 参考：[GitHub 手动运行工作流](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)、[GHCR 权限与认证](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)。
 

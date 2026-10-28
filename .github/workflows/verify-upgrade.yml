@@ -1,0 +1,46 @@
+name: Upgrade and backup rollback (manual)
+on:
+  workflow_dispatch:
+    inputs:
+      previous:
+        description: Previous published image
+        required: true
+        default: ghcr.io/compcj/vibe-domain-agent:sha-6ecfd6116be597948c6835e7b0af6f5e59f6e2fa
+        type: string
+      candidate:
+        description: Candidate published image
+        required: true
+        default: ghcr.io/compcj/vibe-domain-agent:latest
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upgrade-validation
+  cancel-in-progress: false
+
+jobs:
+  upgrade:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      PREVIOUS: ${{ inputs.previous }}
+      CANDIDATE: ${{ inputs.candidate }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Lock image digests and exercise upgrade and rollback
+        run: |
+          set -euo pipefail
+          export DOCKER_CONFIG="$RUNNER_TEMP/anonymous-upgrade-docker"
+          mkdir -p "$DOCKER_CONFIG"
+          for image in "$PREVIOUS" "$CANDIDATE"; do
+            [[ "$image" =~ ^ghcr.io/compcj/vibe-domain-agent(:latest|:sha-[a-f0-9]{40}|@sha256:[a-f0-9]{64})$ ]]
+            docker pull "$image"
+          done
+          previous="$(docker image inspect "$PREVIOUS" --format '{{index .RepoDigests 0}}')"
+          candidate="$(docker image inspect "$CANDIDATE" --format '{{index .RepoDigests 0}}')"
+          [[ "$previous" != "$candidate" ]] || { echo 'Choose two different published versions'; exit 1; }
+          bash scripts/upgrade-smoke.sh "$previous" "$candidate"

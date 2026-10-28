@@ -3,6 +3,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -28,7 +29,11 @@ async def completion(request: Request):
                     'type': 'function', 'function': {'name': 'record_event', 'arguments': json.dumps({'object_id': user[6:]})}}
             yield 'data: ' + json.dumps({'choices': [{'index': 0, 'delta': {'tool_calls': [call]}}]}) + '\n\n'
         else:
-            for text in ['Verified response: ', user, '.']:
+            content = user
+            if user == 'CONTEXT_CHECK':
+                markers = sorted(set(re.findall(r'(?:kb|attachment)-marker-[a-f0-9]{32}', json.dumps(messages))))
+                content = ', '.join(markers) if markers else 'No reference context provided'
+            for text in ['Verified response: ', content, '.']:
                 yield 'data: ' + json.dumps({'choices': [{'index': 0, 'delta': {'content': text}}]}) + '\n\n'
                 await asyncio.sleep(0.03)
         yield 'data: ' + json.dumps({'choices': [], 'usage': {'prompt_tokens': 20, 'completion_tokens': 10}}) + '\n\n'

@@ -18,6 +18,7 @@ export function ModelsPanel() {
         { method: "POST" },
       );
       setNotice(`${model.name}：${result.message}`);
+      await resource.reload();
     } catch (failure) {
       resource.setError(errorMessage(failure));
     } finally {
@@ -78,6 +79,7 @@ export function ModelsPanel() {
                 <span>{model.kind === "chat" ? "对话模型" : "嵌入模型"}</span>
                 <span>{model.has_api_key ? "已保存凭证" : "无凭证"}</span>
               </div>
+              <ModelCapabilities model={model} />
               <div className="card-actions">
                 <button
                   className="button text"
@@ -85,7 +87,7 @@ export function ModelsPanel() {
                   onClick={() => void test(model)}
                 >
                   <PlugZap size={15} />
-                  {testing === model.id ? "测试中" : "测试连接"}
+                  {testing === model.id ? "测试中" : "测试能力"}
                 </button>
                 <button
                   className="icon-button"
@@ -122,6 +124,34 @@ export function ModelsPanel() {
         />
       )}
     </>
+  );
+}
+
+function ModelCapabilities({ model }: { model: ModelConnection }) {
+  const status = (value?: boolean) =>
+    value === undefined ? "未测试" : value ? "已验证" : "未通过";
+  const capabilities = model.capabilities;
+  return (
+    <div className="model-capabilities">
+      {model.kind === "chat" ? (
+        <>
+          <span>流式回答：{status(capabilities?.streaming)}</span>
+          <span>工具调用：{status(capabilities?.tool_calling)}</span>
+        </>
+      ) : (
+        <span>
+          文本嵌入：{status(capabilities?.embedding)}
+          {capabilities?.embedding_dimensions
+            ? ` · ${capabilities.embedding_dimensions} 维`
+            : ""}
+        </span>
+      )}
+      {model.tested_at && (
+        <small>
+          最近测试 {new Date(model.tested_at).toLocaleString("zh-CN")}
+        </small>
+      )}
+    </div>
   );
 }
 

@@ -32,9 +32,15 @@ All routes use /api/v1. JSON snake_case. UUID string ids. Errors `{detail: strin
 - GET /admin/tool-calls?status=outcome_unknown → redacted call summaries for reconciliation.
 - POST /admin/tool-calls/{id}/resolve `{outcome:'succeeded'|'failed',note}` → reconciliation audit, never reexecutes.
 
-## Knowledge / files (next task)
+## Knowledge / files
 
 - GET/POST /admin/knowledge-bases `{name,description,embedding_model_id}`; PATCH/DELETE /admin/knowledge-bases/{id}.
 - GET/POST /admin/knowledge-bases/{id}/documents (POST multipart file); DELETE /admin/documents/{id}; POST .../retry; POST /admin/knowledge-bases/{id}/search `{query}`.
 - POST /files multipart conversation_id,file → `{id,name,status,error?}`; GET /files?conversation_id=...; GET /files/{id}; GET /files/{id}/download; DELETE /files/{id}.
 - GET /citations/{id} → authorized `{id,title,locator,excerpt}`.
+
+同名知识库上传保留文档 ID、增加 revision，旧来源立即退出检索；只允许重试 failed 文档。所有文件响应白名单为 `{id,name,status,error}`，error 可为 null，状态为 queued/processing/indexing/ready/failed。知识库仍有任意文档时切换 embedding_model_id 返回409；Agent 草稿或保留版本引用的知识库不能删除。检索测试返回片段数组，其中预览 id 是 chunk ID，不能用于成员引用接口。
+
+成员引用必须属于本人且来源仍被当前 Agent 授权。来源删除、替换或撤权返回404；关联助手历史回答和事件中的旧内容会投影为不可用提示，不进入后续模型上下文。普通无引用回答不受影响。
+
+模型管理 DTO 增加 `capabilities` 和 `tested_at`。对话模型能力键为 streaming/tool_calling；嵌入模型为 embedding/embedding_dimensions。未测试的键缺省；可选工具调用未通过不会否定已验证的纯对话能力。修改端点、模型标识、用途或凭证会清除测试结果。

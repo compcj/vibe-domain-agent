@@ -162,7 +162,7 @@ function KnowledgeEditor({
         </Field>
         <Field
           label="嵌入模型"
-          hint="文档和检索使用相同模型；切换模型前需重新索引。"
+          hint="更换前先删除库内文档，切换后重新上传索引。"
         >
           <select
             required
@@ -273,7 +273,7 @@ function Documents({
     <Modal title={`${item.name} · 文档与检索`} onClose={onClose} wide>
       <div className="modal-form">
         <p className="muted">
-          支持文本型 PDF、DOCX、TXT、Markdown、CSV、XLSX。每个文件最多 20 MB。
+          支持文本型 PDF、DOCX、TXT、Markdown、CSV、XLSX。每个文件最多 20 MB。同名上传会替换原文档并使旧引用失效。
         </p>
         <input
           ref={upload}

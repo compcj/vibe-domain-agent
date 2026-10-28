@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import type { AdminAgent, ModelConnection } from "../src/types";
 
 const agents = [
   {
@@ -165,4 +166,100 @@ test("portal is usable at desktop and mobile widths", async ({ page }) => {
     fullPage: true,
     animations: "disabled",
   });
+});
+
+test("administrator binds a model, group and knowledge base, publishes, and inspects model capabilities", async ({
+  page,
+}) => {
+  await fixture(page, "admin");
+  let configured: AdminAgent | null = null;
+  const model: ModelConnection = {
+    id: "model",
+    name: "组织对话模型",
+    kind: "chat",
+    base_url: "https://models.example.test/v1",
+    model: "test-model",
+    enabled: true,
+    has_api_key: true,
+  };
+  await page.route("**/api/v1/admin/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname.slice("/api/v1/admin".length);
+    let data: unknown = [];
+    if (path === "/agents") {
+      if (request.method() === "POST") {
+        configured = {
+          id: "configured",
+          ...request.postDataJSON(),
+          published_version_id: null,
+        };
+        data = configured;
+      } else data = configured ? [configured] : [];
+    } else if (path === "/agents/configured/publish") {
+      configured!.published_version_id = "version";
+      data = configured;
+    } else if (path === "/models") data = [model];
+    else if (path === "/groups")
+      data = [{ id: "group", name: "项目团队", description: "" }];
+    else if (path === "/knowledge-bases")
+      data = [
+        {
+          id: "kb",
+          name: "组织制度",
+          description: "",
+          embedding_model_id: "embedding",
+        },
+      ];
+    else if (path === "/models/model/test") {
+      model.capabilities = { streaming: true, tool_calling: false };
+      model.tested_at = new Date().toISOString();
+      data = {
+        ok: true,
+        message: "流式回答通过，工具调用未通过",
+        capabilities: model.capabilities,
+      };
+    }
+    await route.fulfill({ json: data });
+  });
+  await page.getByRole("button", { name: /组织管理/ }).click();
+  await page.getByRole("button", { name: "创建 Agent", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByLabel("名称", { exact: true }).fill("项目政策助手");
+  await dialog
+    .getByRole("combobox", { name: "对话模型", exact: true })
+    .selectOption("model");
+  await dialog
+    .getByLabel("业务介绍", { exact: true })
+    .fill("帮助项目团队理解组织制度。");
+  await dialog
+    .getByLabel("系统提示词", { exact: false })
+    .fill("Synthetic administrator-only instruction.");
+  await dialog.getByLabel("项目团队", { exact: true }).check();
+  await dialog.getByLabel("组织制度", { exact: true }).check();
+  await dialog.getByRole("button", { name: "保存草稿" }).click();
+  await expect(
+    page.getByRole("heading", { name: "项目政策助手" }),
+  ).toBeVisible();
+  expect(configured).toMatchObject({
+    allowed_group_ids: ["group"],
+    draft: {
+      model_id: "model",
+      knowledge_base_ids: ["kb"],
+      system_prompt: "Synthetic administrator-only instruction.",
+    },
+  });
+  await page.getByRole("button", { name: "发布", exact: true }).click();
+  await expect(page.getByText("已发布", { exact: true })).toBeVisible();
+  await page.screenshot({
+    path: "test-results/admin-desktop.png",
+    fullPage: true,
+    animations: "disabled",
+  });
+  await page.getByRole("button", { name: "模型连接", exact: true }).click();
+  await expect(page.getByText("流式回答：未测试")).toBeVisible();
+  await page.getByRole("button", { name: "测试能力" }).click();
+  await expect(page.getByText("流式回答：已验证")).toBeVisible();
+  await expect(
+    page.getByText("工具调用：未通过", { exact: true }),
+  ).toBeVisible();
 });
