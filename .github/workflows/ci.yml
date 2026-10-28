@@ -59,6 +59,7 @@ jobs:
           npm run test:e2e
       - name: Build and smoke the application image
         run: |
+          python scripts/check_build_context.py
           docker build --build-arg VCS_REF="$GITHUB_SHA" --build-arg BUILD_DATE="$(date -u +%FT%TZ)" -t vda:check .
           bash scripts/image-smoke.sh vda:check "$GITHUB_SHA"
           bash scripts/compose-smoke.sh vda:check

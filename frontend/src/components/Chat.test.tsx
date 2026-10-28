@@ -8,6 +8,7 @@ import {
 import { expect, it, vi } from "vitest";
 import { Chat } from "./Chat";
 import type { RunEvent } from "../lib/stream";
+import type { Run } from "../types";
 
 const { request, stream } = vi.hoisted(() => ({
   request: vi.fn(),
@@ -18,6 +19,57 @@ vi.mock("../lib/api", () => ({
   errorMessage: (value: Error) => value.message,
 }));
 vi.mock("../lib/stream", () => ({ watchRun: stream }));
+
+it("loads approvals after the gate becomes waiting and ignores late responses", async () => {
+  const approval = {
+    id: "pending", title: "Action at the gate", summary: "Review action",
+    parameters: {}, expires_at: new Date(Date.now() + 600000).toISOString(),
+  };
+  const running = { id: "run", status: "running", approvals: [] } as Run;
+  const waiting = { ...running, status: "awaiting_confirmation", approvals: [approval] };
+  const pending: ((value: Run) => void)[] = [];
+  let initial = true;
+  request.mockImplementation((path: string) => {
+    if (path !== "/runs/run") return Promise.resolve([]);
+    if (initial) { initial = false; return Promise.resolve(running); }
+    return new Promise<Run>((resolve) => pending.push(resolve));
+  });
+  let listener!: (event: RunEvent) => void;
+  stream.mockImplementation((_id: string, onEvent: typeof listener) => {
+    listener = onEvent;
+    return new Promise(() => {});
+  });
+  render(<Chat conversation={{ id: "conversation", agent_id: "agent", title: "Test",
+    active_run_id: "run", created_at: "" }} onChanged={() => {}} />);
+  await waitFor(() => expect(listener).toBeTypeOf("function"));
+  await act(async () => {
+    listener({ id: 1, type: "approval", data: approval });
+    pending.shift()!(running);
+  });
+  expect(screen.queryByText(approval.title)).not.toBeInTheDocument();
+  await act(async () => {
+    listener({ id: 2, type: "status", data: { status: "awaiting_confirmation" } });
+  });
+  expect(pending).toHaveLength(1);
+  await act(async () => { pending.shift()!(waiting); });
+  expect(screen.getByRole("button", { name: "确认执行" })).toBeInTheDocument();
+  // A previous approval request cannot overwrite the later authoritative gate result.
+  await act(async () => {
+    listener({ id: 3, type: "approval", data: approval });
+    listener({ id: 4, type: "status", data: { status: "awaiting_confirmation" } });
+  });
+  expect(pending).toHaveLength(2);
+  await act(async () => { pending[1]({ ...waiting, approvals: [] }); });
+  await act(async () => { pending[0](waiting); });
+  expect(screen.queryByText(approval.title)).not.toBeInTheDocument();
+  pending.length = 0;
+  await act(async () => {
+    listener({ id: 5, type: "status", data: { status: "awaiting_confirmation" } });
+    listener({ id: 6, type: "done", data: { status: "completed" } });
+  });
+  await act(async () => { pending.shift()!(waiting); });
+  expect(screen.queryByRole("button", { name: "确认执行" })).not.toBeInTheDocument();
+});
 
 it("shows only currently pending approvals when historical events are replayed", async () => {
   const approval = {

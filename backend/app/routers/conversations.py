@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import UTC
 from typing import Annotated
 from uuid import UUID
 
@@ -192,17 +193,22 @@ def events(identifier: UUID, request: Request, db: DB, user: CurrentUser, after:
     except ValueError:
         raise HTTPException(422, "Invalid event cursor") from None
     owner_id, state = user.id, request.app.state
+    login_session_id = request.state.login_session.id
 
     async def stream():
         nonlocal cursor
         while True:
             with state.session_factory() as session:
-                from app.models import User
+                from app.models import LoginSession, User, utcnow
 
+                login_session = session.get(LoginSession, login_session_id)
                 current_user = session.get(User, owner_id)
                 run = session.get(Run, str(identifier))
                 if (
-                    not current_user
+                    not login_session
+                    or login_session.user_id != owner_id
+                    or login_session.expires_at.replace(tzinfo=UTC) <= utcnow()
+                    or not current_user
                     or not current_user.active
                     or not run
                     or run.owner_id != owner_id

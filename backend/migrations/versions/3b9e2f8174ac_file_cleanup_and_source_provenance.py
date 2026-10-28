@@ -39,26 +39,26 @@ def upgrade():
     # Older runs have no explicit history provenance. Conservatively inherit earlier
     # citations in their conversation, including tombstones and paused checkpoints.
     connection = op.get_bind()
-    pairs = (
-        connection.execute(
-            sa.text(
-                "SELECT r.id AS run_id, c.id AS citation_id, r.created_at "
-                "FROM runs r JOIN citations c ON c.conversation_id = r.conversation_id "
-                "WHERE c.run_id != r.id AND c.created_at < r.created_at"
-            )
-        )
-        .mappings()
-        .all()
+    table = sa.table(
+        "run_sources",
+        sa.column("id"),
+        sa.column("run_id"),
+        sa.column("citation_id"),
+        sa.column("created_at"),
     )
-    if pairs:
-        table = sa.table(
-            "run_sources",
-            sa.column("id"),
-            sa.column("run_id"),
-            sa.column("citation_id"),
-            sa.column("created_at"),
-        )
-        connection.execute(table.insert(), [{**dict(pair), "id": str(uuid4())} for pair in pairs])
+    # Bound both the driver result buffer and executemany payload, while keeping
+    # every batch in Alembic's existing migration transaction.
+    with connection.execute(
+        sa.text(
+            "SELECT r.id AS run_id, c.id AS citation_id, r.created_at "
+            "FROM runs r JOIN citations c ON c.conversation_id = r.conversation_id "
+            "WHERE c.run_id != r.id AND c.created_at < r.created_at"
+        ).execution_options(yield_per=500)
+    ) as result:
+        for pairs in result.mappings().partitions(500):
+            connection.execute(
+                table.insert(), [{**dict(pair), "id": str(uuid4())} for pair in pairs]
+            )
 
 
 def downgrade():

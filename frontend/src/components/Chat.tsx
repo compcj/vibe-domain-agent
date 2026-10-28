@@ -191,6 +191,22 @@ export function Chat({
     const controller = new AbortController();
     let finished = false;
     let approvalRequest = 0;
+    const runId = run.id;
+    function refreshApprovals() {
+      const sequence = ++approvalRequest;
+      void api<Run>(`/runs/${runId}`, { signal: controller.signal })
+        .then((current) => {
+          if (
+            !finished &&
+            !controller.signal.aborted &&
+            sequence === approvalRequest
+          )
+            setApprovals(current.approvals ?? []);
+        })
+        .catch((failure: unknown) => {
+          if (!controller.signal.aborted) setError(errorMessage(failure));
+        });
+    }
     void watchRun(
       run.id,
       (event) => {
@@ -201,6 +217,9 @@ export function Chat({
           setRun((value) =>
             value ? { ...value, status: String(event.data.status) } : value,
           );
+          // Approval creation commits before the graph enters its waiting state.
+          // Read again at the gate even if the earlier approval event returned [].
+          if (event.data.status === "awaiting_confirmation") refreshApprovals();
         } else if (event.type === "citation") {
           const source = event.data as unknown as Citation;
           setCitations((value) =>
@@ -209,19 +228,7 @@ export function Chat({
               : [...value, source],
           );
         } else if (event.type === "approval") {
-          const sequence = ++approvalRequest;
-          void api<Run>(`/runs/${run.id}`, { signal: controller.signal })
-            .then((current) => {
-              if (
-                !finished &&
-                !controller.signal.aborted &&
-                sequence === approvalRequest
-              )
-                setApprovals(current.approvals ?? []);
-            })
-            .catch((failure: unknown) => {
-              if (!controller.signal.aborted) setError(errorMessage(failure));
-            });
+          refreshApprovals();
         } else if (event.type === "error")
           setError(String(event.data.message ?? "任务未完成"));
         else if (event.type === "result")
