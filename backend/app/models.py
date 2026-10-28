@@ -115,3 +115,16 @@ class AuditEvent(IdentityMixin, Base):
     action: Mapped[str] = mapped_column(String(100))
     resource_type: Mapped[str] = mapped_column(String(50))
     resource_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+
+
+# Register all execution tables with the shared metadata (including Alembic).
+from app.runtime_models import (  # noqa: E402,F401
+    Approval,
+    Conversation,
+    Feedback,
+    Message,
+    Run,
+    RunEvent,
+    ToolCall,
+    ToolDefinition,
+)

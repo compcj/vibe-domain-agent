@@ -16,10 +16,15 @@ class Settings(BaseSettings):
     storage_dir: str = "./data/files"
     frontend_dist: str = "./frontend/dist"
     session_hours: int = 12
+    sandbox_enabled: bool = False
 
     @model_validator(mode="after")
     def validate_secrets(self):
+        if self.sandbox_enabled:
+            raise ValueError("Sandbox execution is disabled")
         if self.app_env == "production":
+            if not self.redis_url:
+                raise ValueError("Production REDIS_URL is required")
             if len(self.secret_key) < 32 or len(set(self.secret_key)) < 12:
                 raise ValueError("Production SECRET_KEY must be a strong random secret")
             if not self.encryption_key:

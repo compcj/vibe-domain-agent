@@ -24,12 +24,18 @@ def migration_config():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=["migrate", "init-admin"])
+    parser.add_argument("action", choices=["migrate", "init-admin", "cleanup"])
     args = parser.parse_args()
     if args.action == "migrate":
         command.upgrade(migration_config(), "head")
         return
     settings = get_settings()
+    if args.action == "cleanup":
+        from app.main import create_app
+        from app.runtime.recovery import cleanup
+
+        print(cleanup(create_app(settings).state))
+        return
     try:
         data = UserCreate(
             email=input("Email: "),

@@ -48,3 +48,43 @@ def login(client, role="admin"):
     )
     assert response.status_code == 200, response.text
     return {"X-CSRF-Token": response.json()["csrf_token"]}
+
+
+@pytest.fixture
+def runtime_env(env):
+    from app.models import Agent, AgentVersion, Group, ModelConnection, User
+    from sqlalchemy import select
+
+    client, app = env
+    with app.state.session_factory() as db:
+        group = Group(name="runtime")
+        model = ModelConnection(
+            name="fake", kind="chat", base_url="http://model.test/v1", model="fake"
+        )
+        db.add_all([group, model])
+        db.flush()
+        user = db.scalar(select(User).where(User.role == "member"))
+        user.groups = [group]
+        draft = {
+            "model_id": model.id,
+            "system_prompt": "immutable private prompt",
+            "temperature": 0.7,
+            "max_tokens": 100,
+            "tool_ids": [],
+            "knowledge_base_ids": [],
+            "max_steps": 20,
+            "timeout_seconds": 300,
+        }
+        agent = Agent(name="runtime", allowed_group_ids=[group.id], draft=draft)
+        db.add(agent)
+        db.flush()
+        version = AgentVersion(agent_id=agent.id, version=1, snapshot=draft, created_by=user.id)
+        db.add(version)
+        db.flush()
+        agent.published_version_id = version.id
+        db.commit()
+        ids = {"agent": agent.id, "group": group.id, "model": model.id, "user": user.id}
+    dispatched = []
+    app.state.dispatch_run = lambda run_id, resume=False: dispatched.append((run_id, resume))
+    headers = login(client, "member")
+    return client, app, headers, ids, dispatched

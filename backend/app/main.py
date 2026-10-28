@@ -11,7 +11,7 @@ from starlette.staticfiles import StaticFiles
 
 from app.config import Settings, get_settings
 from app.db import make_engine, make_session_factory
-from app.routers import agents, auth, models, operations, users
+from app.routers import agents, auth, conversations, models, operations, tools, users
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -26,9 +26,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.settings = settings
     application.state.engine = make_engine(settings.database_url)
     application.state.session_factory = make_session_factory(application.state.engine)
-    application.state.resource_validators = {}
-    application.state.group_grant_cleanups = []
-    for router in (auth.router, users.router, models.router, agents.router, operations.router):
+    application.state.resource_validators = {"tool_ids": tools.validate_tools}
+    application.state.group_grant_cleanups = [tools.cleanup_group]
+    application.state.attachment_validator = None
+    application.state.runtime_context = None
+    application.state.conversation_cleanup_hooks = []
+    application.state.dispatch_run = None
+    from app.runtime.slots import DevelopmentSlots, RedisSlots
+
+    application.state.execution_slots = (
+        RedisSlots(settings.redis_url) if settings.redis_url else DevelopmentSlots()
+    )
+    for router in (
+        auth.router,
+        users.router,
+        models.router,
+        agents.router,
+        operations.router,
+        conversations.router,
+        tools.router,
+    ):
         application.include_router(router, prefix="/api/v1")
 
     @application.exception_handler(RequestValidationError)

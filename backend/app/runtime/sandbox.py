@@ -1,0 +1,16 @@
+"""Disabled future sandbox adapter; never implemented or invoked in this release."""
+
+from typing import Protocol
+
+
+class SandboxProvider(Protocol):
+    def create_environment(self) -> str: ...
+    def put_file(self, environment_id: str, name: str, content: bytes) -> None: ...
+    def execute(self, environment_id: str, code: str) -> str: ...
+    def get_artifact(self, environment_id: str, name: str) -> bytes: ...
+    def destroy_environment(self, environment_id: str) -> None: ...
+
+
+class DisabledSandbox:
+    def execute(self, environment_id: str, code: str) -> str:
+        raise RuntimeError("Sandbox execution is disabled")
