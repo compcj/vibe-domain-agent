@@ -24,6 +24,7 @@ def race_env(request, runtime_env):
     from app.db import make_engine
     from app.main import create_app
     from app.models import Base, User
+    from app.runtime.checkpoints import initialize_checkpoints
     from app.security import hash_password
     from conftest import runtime_env as seed_runtime
     from fastapi.testclient import TestClient
@@ -35,7 +36,12 @@ def race_env(request, runtime_env):
     with base.begin() as connection:
         connection.execute(CreateSchema(schema))
     url = make_url(os.environ["TEST_POSTGRES_URL"])
-    url = url.set(query={**url.query, "options": "-csearch_path=" + schema})
+    url = url.set(
+        query={
+            **url.query,
+            "options": "-csearch_path=" + schema + " -clock_timeout=5s -cstatement_timeout=30s",
+        }
+    )
     settings = Settings(
         **{
             **runtime_env[1].state.settings.model_dump(),
@@ -45,6 +51,7 @@ def race_env(request, runtime_env):
     app = create_app(settings)
     try:
         Base.metadata.create_all(app.state.engine)
+        initialize_checkpoints(settings)
         with app.state.session_factory() as db:
             for role in ("admin", "member"):
                 db.add(

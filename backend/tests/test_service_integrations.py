@@ -54,7 +54,7 @@ def test_real_postgres_migrations_atomic_claim_and_checkpoint():
     from app.db import make_engine
     from app.main import create_app
     from app.models import Agent, Conversation, Run, User
-    from app.runtime.checkpoints import checkpointer
+    from app.runtime.checkpoints import checkpointer, initialize_checkpoints
     from langgraph.graph import END, START, StateGraph
     from langgraph.types import Command, interrupt
     from sqlalchemy import update
@@ -66,7 +66,12 @@ def test_real_postgres_migrations_atomic_claim_and_checkpoint():
     with base.begin() as connection:
         connection.execute(CreateSchema(schema))
     url = make_url(os.environ["TEST_POSTGRES_URL"])
-    url = url.set(query={**url.query, "options": "-csearch_path=" + schema})
+    url = url.set(
+        query={
+            **url.query,
+            "options": "-csearch_path=" + schema + " -clock_timeout=5s -cstatement_timeout=30s",
+        }
+    )
     app = create_app(
         Settings(
             database_url=url.render_as_string(hide_password=False), app_env="test", redis_url=""
@@ -78,6 +83,7 @@ def test_real_postgres_migrations_atomic_claim_and_checkpoint():
             "sqlalchemy.url", url.render_as_string(hide_password=False).replace("%", "%%")
         )
         command.upgrade(config, "head")
+        initialize_checkpoints(app.state.settings)
         command.check(config)
         with app.state.session_factory() as db:
             user = User(email="test@example.test", display_name="Test", password_hash="unused")

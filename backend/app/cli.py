@@ -27,7 +27,10 @@ def main():
     parser.add_argument("action", choices=["migrate", "init-admin", "cleanup"])
     args = parser.parse_args()
     if args.action == "migrate":
+        from app.runtime.checkpoints import initialize_checkpoints
+
         command.upgrade(migration_config(), "head")
+        initialize_checkpoints(get_settings())
         return
     settings = get_settings()
     if args.action == "cleanup":
