@@ -1086,11 +1086,19 @@ small {
     opacity: 0.25;
   }
 }
+.source-group {
+  margin-top: 18px;
+}
+.source-group > summary {
+  color: #61754e;
+  cursor: pointer;
+  font-size: 12px;
+}
 .citations {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 18px;
+  margin-top: 8px;
 }
 .citations details {
   background: #f6f8f2;

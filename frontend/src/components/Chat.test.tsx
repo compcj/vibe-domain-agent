@@ -153,6 +153,9 @@ it("checks citation access when opened and never falls back to a revoked cached 
       onChanged={() => {}}
     />,
   );
+  const group = (await screen.findByText("参考资料（1 个片段）")).closest("details")!;
+  group.open = true;
+  fireEvent(group, new Event("toggle"));
   const summary = await screen.findByText("1. Reference");
   expect(screen.queryByText("Cached private excerpt")).not.toBeInTheDocument();
   const details = summary.closest("details")!;

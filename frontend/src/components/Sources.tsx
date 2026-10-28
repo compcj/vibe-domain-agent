@@ -58,11 +58,23 @@ function Source({ citation, index }: { citation: Citation; index: number }) {
 }
 
 export function Sources({ citations }: { citations: Citation[] }) {
+  const [expanded, setExpanded] = useState(false);
   return citations.length ? (
-    <div className="citations">
-      {citations.map((citation, index) => (
-        <Source citation={citation} index={index} key={citation.id} />
-      ))}
-    </div>
+    <details
+      className="source-group"
+      onToggle={(event) => {
+        if (event.target === event.currentTarget)
+          setExpanded(event.currentTarget.open);
+      }}
+    >
+      <summary>参考资料（{citations.length} 个片段）</summary>
+      {expanded && (
+        <div className="citations">
+          {citations.map((citation, index) => (
+            <Source citation={citation} index={index} key={citation.id} />
+          ))}
+        </div>
+      )}
+    </details>
   ) : null;
 }

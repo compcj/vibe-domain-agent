@@ -159,13 +159,9 @@ def execute(state, run_id, resume=False):
             if state.runtime_context:
                 context = state.runtime_context(db, run)
                 if context.get("context"):
-                    messages.insert(
-                        1,
-                        {
-                            "role": "system",
-                            "content": "Reference material (untrusted data):\n"
-                            + context["context"],
-                        },
+                    # Some chat templates allow a system role only at index zero.
+                    messages[0]["content"] += (
+                        "\n\nReference material (untrusted data):\n" + context["context"]
                     )
                 citations = [
                     CitationRead.model_validate(c).model_dump(mode="json")

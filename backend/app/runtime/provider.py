@@ -6,6 +6,7 @@ import json
 import httpx
 
 from app.runtime import budget
+from app.runtime.provider_errors import model_http_error
 from app.runtime.store import event, live_access, lock_run
 from app.security import decrypt_secret
 
@@ -17,8 +18,22 @@ class SafeFailure(Exception):
     pass
 
 
+def compatible_messages(messages):
+    """Adapt older checkpoints with separate leading system/reference messages."""
+    end = 0
+    while end < len(messages) and messages[end]["role"] == "system":
+        end += 1
+    if end <= 1:
+        return messages
+    return [
+        {**messages[0], "content": "\n\n".join(item["content"] for item in messages[:end])},
+        *messages[end:],
+    ]
+
+
 def stream_completion(state, run_id, messages, tools):
     budget.check()
+    messages = compatible_messages(messages)
     with state.session_factory() as db:
         run = lock_run(db, run_id)
         live_access(db, run)
@@ -60,7 +75,7 @@ def stream_completion(state, run_id, messages, tools):
                 headers=headers,
             ) as response:
                 if response.status_code != 200:
-                    raise SafeFailure("Model service is unavailable")
+                    raise SafeFailure(model_http_error(response, state, run_id))
                 total = 0
                 for line in bounded_lines(response, state, run_id):
                     budget.heartbeat(state, run_id)

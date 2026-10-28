@@ -22,6 +22,7 @@
 - GET /runs/{id} → `{id,status,error?,approvals:[],created_at}`; POST /runs/{id}/cancel.
 - GET /runs/{id}/events?after=0 → SSE，id 为序号，event 为事件类型，data 为 JSON。类型包括 status `{status,message}`、delta `{text}`、citation `{id,title,locator,excerpt}`、approval `{id,title,summary,parameters,expires_at}`、result `{message}`、done `{status}`、error `{message}`。不返回框架原始事件，通过 Last-Event-ID 或 after 恢复订阅。
 - 事件流每批重新校验原登录会话；登出、密码修改/重置或会话过期后关闭，不继续推送新内容。关闭事件连接不等于取消后台任务。等待确认时通过 `/runs/{id}` 读取当前有效确认记录，不能把历史 approval 事件直接当作待执行操作。
+- 模型 HTTP 失败在 `error`/`error.message` 中返回固定的错误分类、处理建议和 HTTP 状态，包括请求拒绝、上下文超限、鉴权/权限、资源不存在、请求过大、限流/配额和上游故障；不转发上游原文、端点、模型标识或凭证。上下文错误识别只读取最多 16 KiB 的非压缩错误正文，其他情况使用对应状态的通用提示；HTTP 拒绝不会自动重试模型请求。
 - POST /approvals/{id}/decision `{approved:boolean}`；仅发起成员可以决定，决定持久化，重复请求不会重复执行工具。
 - POST /messages/{id}/feedback `{rating:1|-1,comment:''}`.
 - POST /admin/agents/{id}/debug `{message}` → 同一运行响应类型；使用管理员本人私有会话与草稿。
@@ -43,5 +44,7 @@
 同名知识库上传保留文档 ID、增加 revision，旧来源立即退出检索；只允许重试 failed 文档。所有文件响应白名单为 `{id,name,status,error}`，error 可为 null，状态为 queued/processing/indexing/ready/failed。知识库仍有任意文档时切换 embedding_model_id 返回409；Agent 草稿或保留版本引用的知识库不能删除。检索测试返回片段数组，其中预览 id 是 chunk ID，不能用于成员引用接口。
 
 成员引用必须属于本人；知识库来源依据原运行的固定绑定及当前 Agent 使用授权校验。单纯发布或回滚不改变已有运行的绑定；来源删除、替换或撤权返回404。关联助手历史回答、后续继承该来源的回答及事件会投影为不可用提示，不进入后续模型上下文。普通无来源依赖的回答不受影响。管理员只能查看本人草稿调试产生的引用，不能访问其他成员的资料。
+
+一个文件可能对应多个片段引用。成员界面将其放在默认折叠的参考资料列表中，打开片段时重新请求 `/citations/{id}`；收起列表会清除已展示片段，再次展开后重新鉴权。发送给模型的参考资料保留不可信数据标记，与管理员提示组成唯一的首条系统消息；已有检查点的连续首部系统消息在调用边界合并，历史对话与工具消息顺序不变。
 
 模型管理 DTO 增加 `capabilities` 和 `tested_at`。对话模型能力键为 streaming/tool_calling；嵌入模型为 embedding/embedding_dimensions。未测试的键缺省；可选工具调用未通过不会否定已验证的纯对话能力。修改端点、模型标识、用途或凭证会清除测试结果。
