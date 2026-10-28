@@ -16,6 +16,7 @@ import httpx
 
 class Actor:
     def __init__(self, email, password, base='http://127.0.0.1:8000'):
+        self.email, self.password = email, password
         self.client = httpx.Client(base_url=base + '/api/v1', timeout=30, trust_env=False)
         result = self.client.post('/auth/login', json={'email': email, 'password': password})
         result.raise_for_status()
@@ -115,7 +116,26 @@ def main():
     parser.add_argument('--mock', default='http://mock:9000')
     parser.add_argument('--duration', type=int, default=0)
     parser.add_argument('--report', type=Path)
+    parser.add_argument('--prepare-restore', action='store_true')
+    parser.add_argument('--verify-restore', action='store_true')
     args = parser.parse_args()
+    restore_state = Path('/app/data/acceptance-state.json')
+    if args.verify_restore:
+        state = json.loads(restore_state.read_text())
+        actor = Actor(state['email'], state['password'])
+        try:
+            run = actor.request('GET', '/runs/' + state['run'])
+            assert run['status'] == 'awaiting_confirmation'
+            assert Path('/app/data/files/acceptance-sentinel.txt').read_text() == state['marker']
+            assert actor.request('GET', '/conversations/' + state['conversation'])['id'] == state['conversation']
+            actor.request('POST', '/approvals/' + state['approval'] + '/decision', json={'approved': True})
+            actor.wait(state['run'])
+            counts = httpx.get(args.mock + '/business/counts', trust_env=False).json()
+            assert counts['operations'][state['marker']] == counts['requests'][state['marker']] == 1
+            print('Backup restore verified: account, files, conversation, pending approval, checkpoint resume, one external write.')
+        finally:
+            actor.client.close()
+        return
     admin, actors, agent, _tool = provision(args.mock)
     try:
         controlled_write(actors[0], actors[1], agent, args.mock)
@@ -140,12 +160,22 @@ def main():
         success = sum(value[0] for value in results)
         failed = sum(value[1] for value in results)
         report = {'concurrent_clients': 10, 'seconds': round(time.monotonic() - started, 2), 'successful_runs': success,
-                  'failed_runs': failed, 'error_rate': failed / max(1, success + failed), 'controlled_write_submissions': 1}
+                  'failed_runs': failed, 'error_rate': failed / max(1, success + failed), 'smoke_runs': 10, 'controlled_write_submissions': 1}
         if args.report:
             args.report.write_text(json.dumps(report, indent=2), encoding='utf-8')
         print(json.dumps(report))
         assert report['error_rate'] < 0.01
         print('Real-service authorization, streaming, confirmation, duplicate-submit and isolation checks passed.')
+        if args.prepare_restore:
+            actor = actors[0]
+            conversation = new_conversation(actor, agent)
+            marker = 'restore-' + uuid4().hex
+            run = actor.request('POST', '/conversations/' + conversation + '/runs', json={'message': 'WRITE ' + marker})
+            waiting = actor.wait(run['id'], ('awaiting_confirmation',))
+            restore_state.write_text(json.dumps({'email': actor.email, 'password': actor.password,
+                'conversation': conversation, 'run': run['id'], 'approval': waiting['approvals'][0]['id'], 'marker': marker}), encoding='utf-8')
+            Path('/app/data/files/acceptance-sentinel.txt').write_text(marker, encoding='utf-8')
+            print('Prepared durable pending approval and file for joint restore validation.')
     finally:
         for actor in [admin, *actors]:
             actor.client.close()

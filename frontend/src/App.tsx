@@ -22,6 +22,40 @@ import { Admin } from "./components/admin/Admin";
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  function login(session: Session) {
+    setCsrfToken(session.csrf_token);
+    setUser(session.user);
+  }
+  function signedOut() {
+    setUser(null);
+    setCsrfToken("");
+  }
+  useEffect(() => {
+    void api<Session>("/auth/me")
+      .then(login)
+      .catch(() => undefined)
+      .finally(() => setLoading(false));
+    window.addEventListener("session-expired", signedOut);
+    return () => window.removeEventListener("session-expired", signedOut);
+  }, []);
+  if (loading)
+    return (
+      <div className="app-loading">
+        <Brand />
+        <Spinner label="正在连接工作空间" />
+      </div>
+    );
+  if (!user) return <Login onLogin={login} />;
+  return <Workspace key={user.id} user={user} onSignedOut={signedOut} />;
+}
+
+function Workspace({
+  user,
+  onSignedOut,
+}: {
+  user: User;
+  onSignedOut: () => void;
+}) {
   const [agents, setAgents] = useState<AgentCard[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selected, setSelected] = useState<Conversation | null>(null);
@@ -41,25 +75,6 @@ export default function App() {
     setAgents(available);
     setConversations(history);
     return history;
-  }, []);
-  function login(session: Session) {
-    setCsrfToken(session.csrf_token);
-    setUser(session.user);
-    setError("");
-  }
-  useEffect(() => {
-    void api<Session>("/auth/me")
-      .then(login)
-      .catch(() => undefined)
-      .finally(() => setLoading(false));
-    const expired = () => {
-      setUser(null);
-      setCsrfToken("");
-      setSelected(null);
-      setView("catalog");
-    };
-    window.addEventListener("session-expired", expired);
-    return () => window.removeEventListener("session-expired", expired);
   }, []);
   useEffect(() => {
     if (!user) return;
@@ -122,10 +137,7 @@ export default function App() {
   async function logout() {
     try {
       await api("/auth/logout", { method: "POST" });
-      setUser(null);
-      setSelected(null);
-      setView("catalog");
-      setCsrfToken("");
+      onSignedOut();
     } catch (failure) {
       setError(errorMessage(failure));
     }
@@ -140,22 +152,13 @@ export default function App() {
       setPasswordOpen(false);
       setCurrentPassword("");
       setNewPassword("");
-      setUser(null);
-      setCsrfToken("");
+      onSignedOut();
     } catch (failure) {
       setError(errorMessage(failure));
     } finally {
       setBusy(false);
     }
   }
-  if (loading)
-    return (
-      <div className="app-loading">
-        <Brand />
-        <Spinner label="正在连接工作空间" />
-      </div>
-    );
-  if (!user) return <Login onLogin={login} />;
   return (
     <div className="app-shell">
       <button

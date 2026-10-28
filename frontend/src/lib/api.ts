@@ -20,6 +20,7 @@ export async function api<T = unknown>(
   path: string,
   options: Options = {},
 ): Promise<T> {
+  const sessionToken = csrfToken;
   const headers = new Headers(options.headers);
   const method = options.method ?? "GET";
   if (!["GET", "HEAD", "OPTIONS"].includes(method))
@@ -52,7 +53,11 @@ export async function api<T = unknown>(
     } catch {
       /* Non-JSON upstream pages must never be rendered as HTML. */
     }
-    if (response.status === 401 && path !== "/auth/login")
+    if (
+      response.status === 401 &&
+      path !== "/auth/login" &&
+      sessionToken === csrfToken
+    )
       window.dispatchEvent(new Event("session-expired"));
     throw new ApiError(response.status, message);
   }

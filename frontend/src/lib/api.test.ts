@@ -52,4 +52,19 @@ describe("authenticated requests", () => {
     );
     expect(await api("/auth/logout", { method: "POST" })).toBeUndefined();
   });
+  it("does not expire a new login because an old request returns late", async () => {
+    let complete!: (response: Response) => void;
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          complete = resolve;
+        }),
+    );
+    const dispatch = vi.spyOn(window, "dispatchEvent");
+    const oldRequest = api("/conversations").catch((error: ApiError) => error);
+    setCsrfToken("new-account-csrf");
+    complete(new Response('{"detail":"Session expired"}', { status: 401 }));
+    expect(await oldRequest).toBeInstanceOf(ApiError);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
 });

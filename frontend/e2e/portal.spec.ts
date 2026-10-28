@@ -63,6 +63,22 @@ async function fixture(page: Page, role = "member") {
     } else if (path.endsWith("/runs")) {
       data = { id: "run", status: "queued" };
       status = 202;
+    } else if (path === "/runs/run") {
+      data = {
+        id: "run",
+        status: approved ? "completed" : "awaiting_confirmation",
+        approvals: approved
+          ? []
+          : [
+              {
+                id: "approval",
+                title: "更新项目状态",
+                summary: "即将更新项目 PRJ-014",
+                parameters: { project: "PRJ-014", status: "已完成" },
+                expires_at: new Date(Date.now() + 600000).toISOString(),
+              },
+            ],
+      };
     } else if (path === "/approvals/approval/decision") {
       approved = true;
       data = { status: "approved" };

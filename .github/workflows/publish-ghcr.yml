@@ -73,6 +73,7 @@ jobs:
           set -euo pipefail
           docker build --platform linux/amd64 --build-arg VCS_REF="$SOURCE_SHA" --build-arg BUILD_DATE="$(date -u +%FT%TZ)" -t vda:candidate .
           bash scripts/image-smoke.sh vda:candidate "$SOURCE_SHA"
+          bash scripts/compose-smoke.sh vda:candidate
       - name: Publish immutable SHA and promote verified digest
         env:
           SOURCE_SHA: ${{ steps.revision.outputs.sha }}

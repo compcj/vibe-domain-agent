@@ -207,6 +207,8 @@ export function Chat({
   useEffect(() => {
     if (!run || !activeStates.includes(run.status)) return;
     const controller = new AbortController();
+    let finished = false;
+    let approvalRequest = 0;
     void watchRun(
       run.id,
       (event) => {
@@ -225,17 +227,25 @@ export function Chat({
               : [...value, source],
           );
         } else if (event.type === "approval") {
-          const approval = event.data as unknown as Approval;
-          setApprovals((value) =>
-            value.some((item) => item.id === approval.id)
-              ? value
-              : [...value, approval],
-          );
+          const sequence = ++approvalRequest;
+          void api<Run>(`/runs/${run.id}`, { signal: controller.signal })
+            .then((current) => {
+              if (
+                !finished &&
+                !controller.signal.aborted &&
+                sequence === approvalRequest
+              )
+                setApprovals(current.approvals ?? []);
+            })
+            .catch((failure: unknown) => {
+              if (!controller.signal.aborted) setError(errorMessage(failure));
+            });
         } else if (event.type === "error")
           setError(String(event.data.message ?? "任务未完成"));
         else if (event.type === "result")
           setProgress(String(event.data.message ?? ""));
         else if (event.type === "done") {
+          finished = true;
           setRun((value) =>
             value ? { ...value, status: String(event.data.status) } : value,
           );
