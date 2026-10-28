@@ -1,0 +1,25 @@
+name: Capacity validation (manual, 30 minutes)
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: capacity-validation
+  cancel-in-progress: false
+
+jobs:
+  capacity:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Build test image
+        run: docker build --build-arg VCS_REF="$GITHUB_SHA" --build-arg BUILD_DATE="$(date -u +%FT%TZ)" -t vda:capacity .
+      - name: Ten members continuously executing for thirty minutes
+        env:
+          LOAD_DURATION: '1800'
+        run: bash scripts/image-smoke.sh vda:capacity "$GITHUB_SHA"

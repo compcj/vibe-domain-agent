@@ -1,0 +1,80 @@
+name: Publish GHCR (manual)
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-ghcr
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: vda
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: vda
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U vda" --health-interval 5s --health-timeout 3s --health-retries 20
+      redis:
+        image: redis:7.4-alpine
+        ports: ['6379:6379']
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      IMAGE: ghcr.io/compcj/vibe-domain-agent
+    steps:
+      - name: Lock main revision at run start
+        id: revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          [[ "$sha" =~ ^[a-f0-9]{40}$ ]]
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ steps.revision.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Test locked source
+        env:
+          TEST_POSTGRES_URL: postgresql+psycopg://vda:ci-only-password@127.0.0.1:5432/vda
+          TEST_REDIS_URL: redis://127.0.0.1:6379/15
+        run: |
+          set -euo pipefail
+          python -m pip install uv==0.13.6
+          uv sync --frozen --group dev
+          uv run ruff check backend scripts
+          uv run pytest
+          npm --prefix frontend ci
+          npm --prefix frontend run check
+          npm --prefix frontend test
+          npm --prefix frontend run build
+      - name: Build and smoke locally
+        env:
+          SOURCE_SHA: ${{ steps.revision.outputs.sha }}
+        run: |
+          set -euo pipefail
+          docker build --platform linux/amd64 --build-arg VCS_REF="$SOURCE_SHA" --build-arg BUILD_DATE="$(date -u +%FT%TZ)" -t vda:candidate .
+          bash scripts/image-smoke.sh vda:candidate "$SOURCE_SHA"
+      - name: Publish immutable SHA and promote verified digest
+        env:
+          SOURCE_SHA: ${{ steps.revision.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/publish-ghcr.sh

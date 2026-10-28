@@ -1,0 +1,7 @@
+services:
+  migrate:
+    build:
+      context: .
+  api:
+    build:
+      context: .

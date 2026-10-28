@@ -4,6 +4,9 @@
 .cache
 .superpowers
 .tools
+tls
+backups
+**/.pytest-tmp*
 .env
 .env.*
 **/node_modules

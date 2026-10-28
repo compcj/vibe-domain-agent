@@ -16,7 +16,7 @@ All routes use /api/v1. JSON snake_case. UUID string ids. Errors `{detail: strin
 
 ## Conversations / runs (next task)
 
-- GET/POST /conversations; POST `{agent_id,title?}` → `{id,agent_id,title,created_at}`; DELETE /conversations/{id}.
+- GET/POST /conversations; POST `{agent_id,title?}` → `{id,agent_id,title,created_at,active_run_id}`; GET/DELETE /conversations/{id}. Listing includes active_run_id for reconnect after page reload.
 - GET /conversations/{id}/messages → `{id,role,content,citations:[],created_at,run_id}[]`.
 - POST /conversations/{id}/runs `{message,attachment_ids:[]}` → `{id,status}` (202); forbidden extra keys.
 - GET /runs/{id} → `{id,status,error?,approvals:[],created_at}`; POST /runs/{id}/cancel.
@@ -29,6 +29,7 @@ All routes use /api/v1. JSON snake_case. UUID string ids. Errors `{detail: strin
 
 - GET/POST /admin/tools; PATCH/DELETE /admin/tools/{id}; fields `{id,name,title,description,transport:'http'|'mcp',endpoint,method:'POST',mcp_tool_name:'',input_schema:{},fixed_arguments:{},headers:{},effect:'read'|'write',policy:'auto'|'confirm',allowed_group_ids:[],timeout_seconds:30,idempotency_header:'',enabled:true}`. Headers are encrypted secrets, GET returns only has_headers.
 - POST /admin/tools/discover `{endpoint,headers:{}}` → discovered tool list (not automatically registered).
+- GET /admin/tool-calls?status=outcome_unknown → redacted call summaries for reconciliation.
 - POST /admin/tool-calls/{id}/resolve `{outcome:'succeeded'|'failed',note}` → reconciliation audit, never reexecutes.
 
 ## Knowledge / files (next task)

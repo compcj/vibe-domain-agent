@@ -1,0 +1,11 @@
+[Unit]
+Description=Vibe Domain Agent consistent database and file backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/vibe-domain-agent
+ExecStart=/bin/bash scripts/backup.sh
+TimeoutStartSec=900
+UMask=0077

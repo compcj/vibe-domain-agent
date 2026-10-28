@@ -1,6 +1,8 @@
 .venv/
 .cache/
 .pytest_cache/
+.pytest-tmp*/
+**/.pytest-tmp*/
 .ruff_cache/
 __pycache__/
 *.py[cod]
@@ -26,6 +28,8 @@ htmlcov/
 .superpowers/
 .tools/
 .worktrees/
+tls/
+backups/
 *.pem
 *.key
 *.pfx
