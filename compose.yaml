@@ -89,7 +89,11 @@ services:
     <<: *application
     command: [beat]
     healthcheck:
-      disable: true
+      test: [CMD, python, -c, "from pathlib import Path; command = Path('/proc/1/cmdline').read_bytes(); assert b'celery' in command and b'beat' in command; assert any(Path('/app/data').glob('celerybeat-schedule*'))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
   nginx:
     image: nginx:1.28-alpine
     restart: unless-stopped

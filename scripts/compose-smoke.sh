@@ -7,6 +7,12 @@ workspace="$(mktemp -d /tmp/vda-compose.XXXXXX)"
 project="vda-restore-${GITHUB_RUN_ID:-local}-$$"
 export APP_IMAGE="$image" HTTP_PORT=0
 cleanup() {
+  result=$?
+  if [[ "$result" != 0 ]]; then
+    for side in source restored; do
+      (cd "$workspace/$side" && COMPOSE_PROJECT_NAME="$project-$side" docker compose ps -a && COMPOSE_PROJECT_NAME="$project-$side" docker compose logs --tail=60) || true
+    done
+  fi
   docker rm -f "$project-mock" >/dev/null 2>&1 || true
   for side in source restored; do
     (cd "$workspace/$side" && COMPOSE_PROJECT_NAME="$project-$side" docker compose down -v --remove-orphans) >/dev/null 2>&1 || true
