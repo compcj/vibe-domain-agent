@@ -107,6 +107,7 @@ export function StatusTag({ status }: { status: string }) {
     running: "执行中",
     failed: "失败",
     cancelled: "已停止",
+    expired: "确认已过期",
     awaiting_confirmation: "等待确认",
     outcome_unknown: "结果待核实",
   };

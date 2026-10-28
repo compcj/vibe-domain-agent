@@ -43,4 +43,6 @@ flowchart LR
 
 生产使用 PostgreSQL 检查点和 Redis 协调；SQLite 只用于本地开发及隔离单元测试。容器中执行进程与 API 必须使用同一版本、数据库、加密密钥和文件卷。沙盒接口保持禁用，OpenSandbox 属于下一阶段。
 
+部署时先运行 `python -m app.cli migrate`：Alembic 管理应用表，随后显式初始化 SDK 管理的检查点表与索引。正常 PostgreSQL 运行只检查既有 schema，不在业务事务中执行建表或建索引。初始化有连接、锁和语句超时；升级期间先停止业务流量。
+
 参考：[LangGraph 中断与恢复](https://docs.langchain.com/oss/python/langgraph/interrupts)、[Docker 多阶段构建](https://docs.docker.com/build/building/multi-stage/)。

@@ -26,6 +26,7 @@ import type {
 } from "../types";
 import { ApprovalCard } from "./ApprovalCard";
 import { StatusTag } from "./Common";
+import { Sources } from "./Sources";
 
 const activeStates = ["queued", "running", "awaiting_confirmation"];
 
@@ -47,25 +48,6 @@ function MessageBody({ content }: { content: string }) {
       </Markdown>
     </div>
   );
-}
-
-function Sources({ citations }: { citations: Citation[] }) {
-  return citations.length ? (
-    <div className="citations">
-      {citations.map((citation, index) => (
-        <details key={citation.id}>
-          <summary>
-            <BookOpen size={13} />
-            <span>
-              {index + 1}. {citation.title}
-            </span>
-          </summary>
-          <small>{citation.locator}</small>
-          <p>{citation.excerpt}</p>
-        </details>
-      ))}
-    </div>
-  ) : null;
 }
 
 function MessageActions({ message }: { message: Message }) {
@@ -439,7 +421,9 @@ export function Chat({
           ))}
           {run &&
             !busy &&
-            ["cancelled", "outcome_unknown", "failed"].includes(run.status) && (
+            ["cancelled", "outcome_unknown", "failed", "expired"].includes(
+              run.status,
+            ) && (
               <div className="run-notice">
                 <StatusTag status={run.status} />
                 <span>
@@ -472,7 +456,15 @@ export function Chat({
             {files.map((file) => (
               <div className="attachment" key={file.id}>
                 <FileText size={15} />
-                <span title={file.error}>{file.name}</span>
+                <div className="attachment-description">
+                  <a
+                    href={`/api/v1/files/${encodeURIComponent(file.id)}/download`}
+                    download={file.name}
+                  >
+                    {file.name}
+                  </a>
+                  {file.error && <small className="error">{file.error}</small>}
+                </div>
                 <StatusTag status={file.status} />
                 <button
                   className="icon-button"

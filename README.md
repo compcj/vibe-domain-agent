@@ -83,11 +83,12 @@ docker run --rm --user "$(id -u):$(id -g)" \
 使用有效证书，在 `tls/fullchain.pem` 与 `tls/privkey.pem` 放置证书和私钥，然后：
 
 ```sh
-docker compose -f compose.yaml -f compose.https.yaml up -d --wait
+export COMPOSE_FILE=compose.yaml:compose.https.yaml
+docker compose up -d --wait
 docker compose run --rm api init-admin
 ```
 
-通过服务器域名的 HTTPS 地址访问。也可以由现有网关终止 HTTPS，再转发到默认仅绑定环回地址的 `127.0.0.1:8080`，此时使用 `docker compose up -d --wait`。不要把明文 HTTP 暴露公网。生产登录 Cookie 使用 Secure，直接 HTTP 登录不会维持会话。
+通过服务器域名的 HTTPS 地址访问。在部署、升级、备份与恢复的终端中保持同一 `COMPOSE_FILE`，使脚本也加载 HTTPS 配置。也可以由现有网关终止 HTTPS，再转发到默认仅绑定环回地址的 `127.0.0.1:8080`，此时不设置 `COMPOSE_FILE`，使用 `docker compose up -d --wait`。不要把明文 HTTP 暴露公网。生产登录 Cookie 使用 Secure，直接 HTTP 登录不会维持会话。
 
 仅在本地体验时把 `APP_ENV=development`，启动基本 Compose 后访问 `http://127.0.0.1:8080`。数据库和 Redis 不向宿主机发布端口。应用 UID 为 10001，使用命名卷。改用绑定目录时需授予该 UID 文件写入权限。
 
@@ -133,7 +134,7 @@ docker pull ghcr.io/compcj/vibe-domain-agent@sha256:<发布摘要>
 
 ## 升级、回滚与备份
 
-升级前安排维护窗口，执行 `bash scripts/backup.sh`。将 `APP_IMAGE` 换为目标 digest，运行 `docker compose pull`，然后 `docker compose up -d --wait`（使用 HTTPS 覆盖文件的部署需始终携带同一组 `-f` 参数）。迁移服务先完成，应用再启动。
+升级前安排维护窗口，执行 `bash scripts/backup.sh`。将 `APP_IMAGE` 换为目标 digest，运行 `docker compose pull`，然后 `docker compose up -d --wait`（HTTPS 部署保持上述 `COMPOSE_FILE`）。迁移服务先完成应用表与 LangGraph 检查点表的初始化，应用再启动；业务运行不会创建 PostgreSQL 表或索引。
 
 回滚先检查目标版本是否兼容当前数据库 schema；更换旧镜像不等于数据库回滚。兼容时恢复旧 digest 并重新启动；不兼容时在新部署中恢复升级前的联合备份，再切换入口。避免对仍有业务写入的库直接运行降级迁移。
 
