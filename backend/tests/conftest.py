@@ -14,6 +14,7 @@ def env(tmp_path):
         database_url=f"sqlite:///{tmp_path / 'test.db'}",
         redis_url="",
         app_env="test",
+        storage_dir=str(tmp_path / "files"),
         secret_key="x" * 64,
         encryption_key=Fernet.generate_key().decode(),
     )

@@ -128,10 +128,12 @@ def test_model_url_validation_redaction_and_no_redirects(env, monkeypatch):
             )
             == "private-secret"
         )
-    real_client = httpx.Client
+    real_client = httpx.AsyncClient
 
     def upstream(**kwargs):
         assert kwargs["follow_redirects"] is False
+        assert kwargs["trust_env"] is False
+        kwargs.pop("transport", None)
 
         def handler(request):
             assert request.headers["authorization"] == "Bearer private-secret"
@@ -139,9 +141,10 @@ def test_model_url_validation_redaction_and_no_redirects(env, monkeypatch):
 
         return real_client(**kwargs, transport=httpx.MockTransport(handler))
 
-    monkeypatch.setattr("app.routers.models.httpx.Client", upstream)
+    monkeypatch.setattr("app.knowledge.embedding.httpx.AsyncClient", upstream)
     response = client.post(f"/api/v1/admin/models/{model['id']}/test", headers=headers)
-    assert response.json() == {"ok": False, "message": "Connection test failed"}
+    assert response.json()["ok"] is False
+    assert response.json()["message"] == "Connection test failed"
     assert "private-secret" not in client.get("/api/v1/admin/audit").text
 
 
@@ -220,15 +223,17 @@ def test_model_test_rejects_malformed_upstream_without_internal_error(env, monke
     client, _ = env
     headers = login(client)
     model, _ = model_and_agent(client, headers)
-    real_client = httpx.Client
+    real_client = httpx.AsyncClient
     monkeypatch.setattr(
-        "app.routers.models.httpx.Client",
+        "app.knowledge.embedding.httpx.AsyncClient",
         lambda **kwargs: real_client(
-            **kwargs, transport=httpx.MockTransport(lambda request: httpx.Response(200, json=[]))
+            **{key: value for key, value in kwargs.items() if key != "transport"},
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json=[])),
         ),
     )
     response = client.post(f"/api/v1/admin/models/{model['id']}/test", headers=headers)
-    assert response.json() == {"ok": False, "message": "Connection test failed"}
+    assert response.json()["ok"] is False
+    assert response.json()["message"] == "Connection test failed"
 
 
 def test_validation_errors_never_echo_credentials(env):

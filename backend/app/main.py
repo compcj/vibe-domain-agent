@@ -32,6 +32,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.runtime_context = None
     application.state.conversation_cleanup_hooks = []
     application.state.dispatch_run = None
+    application.state.dispatch_index = None
+    from app.knowledge import api as knowledge_api
+    from app.knowledge.access import cleanup_conversation, validate_attachments, validate_knowledge
+
+    application.state.resource_validators["knowledge_base_ids"] = validate_knowledge
+    application.state.attachment_validator = validate_attachments
+    from app.knowledge.context import build_context
+
+    application.state.runtime_context = lambda db, run: build_context(application.state, db, run)
+    application.state.conversation_cleanup_hooks.append(
+        lambda db, cid: cleanup_conversation(application.state, db, cid)
+    )
     from app.runtime.slots import DevelopmentSlots, RedisSlots
 
     application.state.execution_slots = (
@@ -45,6 +57,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         operations.router,
         conversations.router,
         tools.router,
+        knowledge_api.router,
     ):
         application.include_router(router, prefix="/api/v1")
 

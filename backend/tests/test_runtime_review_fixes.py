@@ -39,7 +39,7 @@ def race_env(request, runtime_env):
     url = url.set(
         query={
             **url.query,
-            "options": "-csearch_path=" + schema + " -clock_timeout=5s -cstatement_timeout=30s",
+            "options": "-csearch_path=" + schema + ",public -clock_timeout=5s -cstatement_timeout=30s",
         }
     )
     settings = Settings(

@@ -36,6 +36,10 @@ def build_graph(state, run_id, saver):
         with state.session_factory() as db:
             run = lock_run(db, run_id)
             check_budget(db, run)
+            if graph.get("citations"):
+                from app.knowledge.access import validate_run_citations
+
+                validate_run_citations(db, run, live_access(db, run), graph["citations"])
             run.steps += 1
             tools = []
             for tool in run.snapshot["tools"]:
@@ -139,15 +143,18 @@ def execute(state, run_id, resume=False):
             )
             if size > 200000:
                 raise SafeFailure("Conversation context exceeds the configured size limit")
+            user = live_access(db, run)
+            from app.knowledge.access import message_content
             history = db.scalars(
                 select(Message)
                 .where(Message.conversation_id == run.conversation_id)
                 .order_by(Message.created_at)
             ).all()
             messages = [{"role": "system", "content": run.snapshot["system_prompt"]}] + [
-                {"role": message.role, "content": message.content} for message in history
+                {"role": message.role, "content": message_content(db, user, message)} for message in history
             ]
             citations = []
+            db.commit()  # Release run fence before the RAG embedding network boundary.
             if state.runtime_context:
                 context = state.runtime_context(db, run)
                 if context.get("context"):
@@ -172,6 +179,15 @@ def execute(state, run_id, resume=False):
             checkpoint = graph.get_state(config)
             initial = {"messages": messages, "calls": [], "citations": citations}
             if checkpoint.values:
+                if checkpoint.values.get("citations"):
+                    from app.knowledge.access import validate_run_citations
+
+                    with state.session_factory() as db:
+                        current = lock_run(db, run_id)
+                        validate_run_citations(
+                            db, current, live_access(db, current), checkpoint.values["citations"]
+                        )
+                        db.commit()
                 initial = Command(resume=True) if checkpoint.interrupts else None
             result = graph.invoke(initial, config)
             if result.get("__interrupt__"):
@@ -180,6 +196,7 @@ def execute(state, run_id, resume=False):
                 run = lock_run(db, run_id)
                 if run.status in TERMINAL:
                     return
+                live_access(db, run)
                 answer = result["messages"][-1].get("content", "")
                 db.add(
                     Message(

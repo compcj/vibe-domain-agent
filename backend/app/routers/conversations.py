@@ -87,11 +87,20 @@ def delete_conversation(identifier: UUID, request: Request, db: DB, user: Member
 @router.get("/conversations/{identifier}/messages", response_model=list[MessageRead])
 def messages(identifier: UUID, db: DB, user: CurrentUser):
     owned(db, Conversation, identifier, user)
-    return db.scalars(
+    rows = db.scalars(
         select(Message)
         .where(Message.conversation_id == str(identifier))
         .order_by(Message.created_at)
     ).all()
+    from app.knowledge.access import message_content, visible_citations
+
+    result = []
+    for row in rows:
+        value = MessageRead.model_validate(row).model_dump(mode="json")
+        value["citations"] = visible_citations(db, user, row.citations)
+        value["content"] = message_content(db, user, row)
+        result.append(value)
+    return result
 
 
 @router.post("/conversations/{identifier}/runs", response_model=RunAccepted, status_code=202)
@@ -138,6 +147,10 @@ def get_run(identifier: UUID, db: DB, user: CurrentUser):
         if run.status == "awaiting_confirmation"
         else []
     )
+    from app.knowledge.access import references_hidden
+
+    if references_hidden(db, user, run.id):
+        approvals = []
     return {
         "id": run.id,
         "status": run.status,
@@ -202,9 +215,24 @@ def events(identifier: UUID, request: Request, db: DB, user: CurrentUser, after:
                     .limit(200)
                 ).all()
                 terminal = run.status in TERMINAL
+                from app.knowledge.access import UNAVAILABLE_ANSWER, references_hidden
+
+                hidden = references_hidden(session, current_user, run.id)
                 for row in rows:
                     cursor = row.seq
-                    yield f"id: {row.seq}\nevent: {row.kind}\ndata: {json.dumps(row.data, separators=(',', ':'))}\n\n"
+                    if hidden and row.kind in {"delta", "citation", "approval"}:
+                        continue
+                    data = (
+                        {"message": UNAVAILABLE_ANSWER}
+                        if hidden and row.kind == "result"
+                        else row.data
+                    )
+                    if row.kind == "citation":
+                        from app.knowledge.access import visible_citations
+
+                        if not visible_citations(session, current_user, [row.data]):
+                            continue
+                    yield f"id: {row.seq}\nevent: {row.kind}\ndata: {json.dumps(data, separators=(',', ':'))}\n\n"
             if terminal and len(rows) < 200:
                 return
             if await request.is_disconnected():

@@ -1,14 +1,13 @@
 from uuid import UUID
 
-import httpx
 from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import select
 
 from app.dependencies import DB, Admin
-from app.models import Agent, AgentVersion, ModelConnection
+from app.models import Agent, AgentVersion, ModelConnection, utcnow
 from app.routers.users import get_object
 from app.schemas import ModelInput, ModelPatch, ModelRead
-from app.security import audit, decrypt_secret, encrypt_secret
+from app.security import audit, encrypt_secret
 
 router = APIRouter(prefix="/admin/models", tags=["model connections"])
 
@@ -22,11 +21,16 @@ def model_read(model):
         model=model.model,
         enabled=model.enabled,
         has_api_key=bool(model.api_key_encrypted),
+        capabilities=model.capabilities or {},
+        tested_at=model.tested_at,
     )
 
 
 def apply_model(model, data, settings):
     values = data.model_dump(exclude_unset=True, exclude_none=True)
+    if set(values).intersection({"api_key", "base_url", "model", "kind"}):
+        model.capabilities = {}
+        model.tested_at = None
     if "api_key" in values:
         try:
             model.api_key_encrypted = encrypt_secret(values.pop("api_key"), settings)
@@ -70,7 +74,12 @@ def delete_model(identifier: UUID, db: DB, admin: Admin):
     version_reference = db.scalar(
         select(AgentVersion.id).where(AgentVersion.snapshot["model_id"].as_string() == model.id)
     )
-    if draft_reference or version_reference:
+    from app.knowledge.models import KnowledgeBase
+
+    knowledge_reference = db.scalar(
+        select(KnowledgeBase.id).where(KnowledgeBase.embedding_model_id == model.id)
+    )
+    if draft_reference or version_reference or knowledge_reference:
         raise HTTPException(409, "Model is referenced by an Agent; disable it instead")
     db.delete(model)
     audit(db, admin, "delete", "model", str(identifier))
@@ -82,25 +91,11 @@ def test_model(identifier: UUID, request: Request, db: DB, admin: Admin):
     model = get_object(db, ModelConnection, identifier)
     if not model.enabled:
         raise HTTPException(409, "Model is disabled")
-    credential = decrypt_secret(model.api_key_encrypted, request.app.state.settings)
-    headers = {"Authorization": f"Bearer {credential}"} if credential else {}
-    payload = {"model": model.model}
-    if model.kind == "chat":
-        endpoint = "chat/completions"
-        payload.update(messages=[{"role": "user", "content": "Reply OK"}], max_tokens=8)
-    else:
-        endpoint = "embeddings"
-        payload.update(input="Connection test")
-    try:
-        with httpx.Client(timeout=15, follow_redirects=False) as client:
-            response = client.post(f"{model.base_url}/{endpoint}", json=payload, headers=headers)
-        response.raise_for_status()
-        body = response.json()
-        ok = isinstance(body, dict) and isinstance(
-            body.get("choices" if model.kind == "chat" else "data"), list
-        )
-    except (httpx.HTTPError, ValueError):
-        ok = False
+    from app.knowledge.probes import probe
+
+    result = probe(request.app.state, model)
+    model.capabilities = result["capabilities"]
+    model.tested_at = utcnow()
     audit(db, admin, "connection_test", "model", model.id)
     db.commit()
-    return {"ok": ok, "message": "Connection succeeded" if ok else "Connection test failed"}
+    return result

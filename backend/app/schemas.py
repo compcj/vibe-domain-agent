@@ -132,6 +132,8 @@ class ModelRead(Output):
     model: str
     enabled: bool
     has_api_key: bool
+    capabilities: dict = Field(default_factory=dict)
+    tested_at: datetime | None = None
 
 
 class Draft(Input):

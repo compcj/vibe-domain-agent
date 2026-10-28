@@ -10,6 +10,7 @@ from app.config import get_settings
 settings = get_settings()
 celery_app = Celery("domain_agent", broker=settings.redis_url or "memory://")
 celery_app.conf.update(
+    imports=("app.knowledge.tasks",),
     task_queues=(Queue("runs"), Queue("indexing")),
     task_default_queue="runs",
     task_routes={
@@ -28,6 +29,7 @@ celery_app.conf.update(
     task_time_limit=360,
     broker_transport_options={"visibility_timeout": 450},
     beat_schedule={
+        "recover-indexing": {"task": "app.knowledge.tasks.recover", "schedule": 30.0},
         "recover-runs": {"task": "app.worker.recover_runs", "schedule": 30.0},
         "cleanup-retention": {"task": "app.worker.cleanup_retention", "schedule": 86400.0},
     },

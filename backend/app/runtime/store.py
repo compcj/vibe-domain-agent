@@ -144,6 +144,13 @@ def live_access(db, run, tool_id=None):
             or not set(user.group_ids).intersection(tool.allowed_group_ids)
         ):
             raise HTTPException(403, "Tool is no longer available")
+    from app.knowledge.access import validate_run_citations, validate_run_knowledge
+    from app.knowledge.models import Citation
+
+    validate_run_knowledge(db, run, user)
+    references = db.scalars(select(Citation).where(Citation.run_id == run.id)).all()
+    if references:
+        validate_run_citations(db, run, user, [{"id": reference.id} for reference in references])
     return user
 
 
@@ -183,6 +190,9 @@ def snapshot(db, agent, state, debug=False):
                 )
             }
         )
+    from app.knowledge.access import frozen_knowledge
+
+    config["knowledge"] = frozen_knowledge(db, config)
     return config
 
 
@@ -206,6 +216,8 @@ def create_run(db, state, user, conversation, data, debug=False):
     ).rowcount
     if not claimed:
         raise HTTPException(409, "Conversation already has an active run")
+    if data.attachment_ids:
+        state.attachment_validator(db, user, conversation, data.attachment_ids)
     run = Run(
         id=rid,
         owner_id=user.id,

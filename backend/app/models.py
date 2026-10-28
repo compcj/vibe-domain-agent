@@ -83,6 +83,8 @@ class ModelConnection(IdentityMixin, Base):
     model: Mapped[str] = mapped_column(String(200))
     api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    capabilities: Mapped[dict] = mapped_column(JSON, default=dict)
+    tested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Agent(IdentityMixin, Base):
@@ -118,6 +120,7 @@ class AuditEvent(IdentityMixin, Base):
 
 
 # Register all execution tables with the shared metadata (including Alembic).
+from app.knowledge.models import Chunk, Citation, Document, KnowledgeBase  # noqa: E402,F401
 from app.runtime_models import (  # noqa: E402,F401
     Approval,
     Conversation,

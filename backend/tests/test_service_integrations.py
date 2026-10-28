@@ -69,7 +69,9 @@ def test_real_postgres_migrations_atomic_claim_and_checkpoint():
     url = url.set(
         query={
             **url.query,
-            "options": "-csearch_path=" + schema + " -clock_timeout=5s -cstatement_timeout=30s",
+            "options": "-csearch_path="
+            + schema
+            + ",public -clock_timeout=5s -cstatement_timeout=30s",
         }
     )
     app = create_app(
@@ -110,6 +112,84 @@ def test_real_postgres_migrations_atomic_claim_and_checkpoint():
 
         with ThreadPoolExecutor(max_workers=4) as pool:
             assert sum(pool.map(claim, range(4))) == 1
+
+        # Real pgvector storage and database-side cosine, including distinct embedding dimensions.
+        from app.knowledge.models import Chunk, Document, KnowledgeBase
+        from app.knowledge.retrieval import matching_chunks
+        from app.models import ModelConnection
+
+        with app.state.session_factory() as db:
+            model = ModelConnection(
+                name="embedding", kind="embedding", base_url="https://mock.test", model="mock"
+            )
+            db.add(model)
+            db.flush()
+            first = KnowledgeBase(name="first", embedding_model_id=model.id)
+            other = KnowledgeBase(name="other", embedding_model_id=model.id)
+            db.add_all([first, other])
+            db.flush()
+            ready = Document(
+                knowledge_base_id=first.id,
+                name="ready.txt",
+                status="ready",
+                storage_key="unused",
+                checksum="x",
+                embedding_fingerprint="space",
+            )
+            outside = Document(
+                knowledge_base_id=other.id,
+                name="other.txt",
+                status="ready",
+                storage_key="unused",
+                checksum="x",
+                embedding_fingerprint="other",
+            )
+            queued = Document(
+                knowledge_base_id=first.id,
+                name="queued.txt",
+                status="queued",
+                storage_key="unused",
+                checksum="x",
+                embedding_fingerprint="space",
+            )
+            db.add_all([ready, outside, queued])
+            db.flush()
+            db.add_all(
+                [
+                    Chunk(
+                        document_id=ready.id,
+                        revision=1,
+                        text="matched",
+                        locator="page 1",
+                        vector=[1, 0, 0],
+                    ),
+                    Chunk(
+                        document_id=outside.id,
+                        revision=1,
+                        text="outside",
+                        locator="page 1",
+                        vector=[1, 0],
+                    ),
+                    Chunk(
+                        document_id=queued.id,
+                        revision=1,
+                        text="queued",
+                        locator="page 1",
+                        vector=[1, 0, 0],
+                    ),
+                    Chunk(
+                        document_id=ready.id,
+                        revision=0,
+                        text="stale",
+                        locator="page 1",
+                        vector=[1, 0, 0],
+                    ),
+                ]
+            )
+            db.commit()
+            assert [
+                chunk.text for chunk, _ in matching_chunks(db, first.id, "space", [1, 0, 0])
+            ] == ["matched"]
 
         def gate(state):
             return {"approved": interrupt("confirm")}
