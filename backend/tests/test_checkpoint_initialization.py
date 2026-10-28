@@ -174,3 +174,14 @@ def test_postgres_uri_roundtrip_preserves_socket_host_query():
     assert parsed["host"] == "/tmp"
     assert parsed["port"] == "5432"
     assert parsed["dbname"] == "test_db"
+
+
+def test_postgres_uri_roundtrip_preserves_ipv6_scope_identifier():
+    from psycopg.conninfo import conninfo_to_dict
+    from sqlalchemy.engine import URL, make_url
+
+    original = URL.create("postgresql+psycopg", host="fe80::1%eth0", port=5432, database="test_db")
+    configured = make_url(original.render_as_string(hide_password=False))
+    parsed = conninfo_to_dict(checkpoints.postgres_connection_url(configured))
+    assert parsed["host"] == "fe80::1%eth0"
+    assert parsed["port"] == "5432"

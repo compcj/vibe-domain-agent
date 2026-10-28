@@ -23,7 +23,7 @@ def postgres_connection_url(url):
             authority += ":" + quote(str(url.password), safe="")
         authority += "@"
     host = url.host or ""
-    authority += "[" + host + "]" if ":" in host else quote(host, safe="")
+    authority += "[" + quote(host, safe=":") + "]" if ":" in host else quote(host, safe="")
     if url.port is not None:
         authority += ":" + str(url.port)
     query = urlencode({**url.query, "connect_timeout": "10"}, doseq=True, quote_via=quote)
