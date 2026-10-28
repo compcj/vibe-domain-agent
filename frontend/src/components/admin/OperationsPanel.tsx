@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
-import { Activity, CheckCircle2, Clock3, AlertCircle } from "lucide-react";
+import {
+  Activity,
+  CheckCircle2,
+  Clock3,
+  AlertCircle,
+  Coins,
+  Wrench,
+  ThumbsUp,
+} from "lucide-react";
 import { api, errorMessage } from "../../lib/api";
 import { Field, Modal, Spinner } from "../Common";
 import { FormActions, Toolbar } from "./shared";
@@ -51,6 +59,9 @@ export function OperationsPanel() {
     typeof metrics[key] === "number"
       ? Number(metrics[key]).toLocaleString()
       : "—";
+  const feedback = metrics.feedback_ratings as
+    | Record<string, number>
+    | undefined;
   return (
     <>
       <Toolbar
@@ -73,6 +84,10 @@ export function OperationsPanel() {
               { key: "completed_runs", title: "已完成", icon: CheckCircle2 },
               { key: "active_runs", title: "进行中", icon: Clock3 },
               { key: "failed_runs", title: "失败运行", icon: AlertCircle },
+              { key: "input_tokens", title: "输入 Token", icon: Coins },
+              { key: "output_tokens", title: "输出 Token", icon: Coins },
+              { key: "tool_calls", title: "工具调用", icon: Wrench },
+              { key: "feedback", title: "回答反馈", icon: ThumbsUp },
             ].map(({ key, title, icon: Icon }) => (
               <article key={key} className="metric-card">
                 <span>
@@ -82,6 +97,33 @@ export function OperationsPanel() {
                 <strong>{value(key)}</strong>
               </article>
             ))}
+          </div>
+          <div className="performance-strip">
+            <div>
+              <small>运行失败率</small>
+              <strong>
+                {typeof metrics.error_rate === "number"
+                  ? `${(metrics.error_rate * 100).toFixed(1)}%`
+                  : "—"}
+              </strong>
+            </div>
+            <div>
+              <small>平均执行耗时 · 不含确认等待</small>
+              <strong>
+                {typeof metrics.average_active_seconds === "number"
+                  ? `${metrics.average_active_seconds.toFixed(1)} 秒`
+                  : "—"}
+              </strong>
+            </div>
+            <div>
+              <small>反馈 · 有帮助 / 需要改进</small>
+              <strong>
+                {feedback
+                  ? `${feedback["1"] ?? 0} / ${feedback["-1"] ?? 0}`
+                  : "—"}
+              </strong>
+            </div>
+            <p>Token 仅统计模型服务实际返回的用量；未返回时显示“—”。</p>
           </div>
           <section className="admin-section">
             <h3>

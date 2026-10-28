@@ -127,6 +127,8 @@ docker pull ghcr.io/compcj/vibe-domain-agent:sha-<完整提交SHA>
 docker pull ghcr.io/compcj/vibe-domain-agent@sha256:<发布摘要>
 ```
 
+可手动运行 `gh workflow run verify-public.yml --repo compcj/vibe-domain-agent --ref main`，在空 Docker 凭据目录中匿名拉取，并检查迁移、API、前端和 Worker。该验证工作流不发布镜像。30 分钟模拟容量验证使用 `validate-load.yml`，结果写入 Actions Summary。
+
 参考：[GitHub 手动运行工作流](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)、[GHCR 权限与认证](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)。
 
 ## 升级、回滚与备份
