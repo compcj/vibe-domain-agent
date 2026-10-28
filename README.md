@@ -2,11 +2,11 @@
 
 面向单组织私有部署的 Agent 平台。管理员配置模型、提示词、工具、知识库与授权；成员在浏览器中选择获授权的助手，开展问答、文档分析及可确认的业务操作。
 
-代码仓库：[compcj/vibe-domain-agent](https://github.com/compcj/vibe-domain-agent)。应用镜像：`ghcr.io/compcj/vibe-domain-agent`。本仓库正在实施首版；详细实现和验证状态以[路线图](docs/roadmap.md)与[验证记录](docs/verification.md)为准，不将生成的工程文件视为生产验收完成。
+代码仓库：[compcj/vibe-domain-agent](https://github.com/compcj/vibe-domain-agent)。应用镜像：`ghcr.io/compcj/vibe-domain-agent`。首版工程、GitHub/GHCR 与部署文件已交付；目标服务器部署和业务试点待验收。详细实现和验证状态见[路线图](docs/roadmap.md)与[验证记录](docs/verification.md)。
 
 ## 功能与边界
 
-已实现：独立账号、用户组及授权、模型与能力测试、Agent 草稿/调试/发布/回滚、多轮流式对话、HTTP/MCP 工具、业务确认、调用账本、审计和管理界面。基础镜像已完成手动 GHCR 发布、匿名拉取、容器启动和联合备份恢复。知识库、附件与引用已实现，正在进行独立审查和完整容器联调，详细证据见验证记录。
+已实现：独立账号、用户组及授权、模型与能力测试、Agent 草稿/调试/发布/回滚、多轮流式对话、HTTP/MCP 工具、业务确认、调用账本、审计、知识库、附件、引用和管理界面。完整版本已发布到 GHCR，知识检索与联合备份恢复已通过真实 PostgreSQL/Redis 容器验证。各版本的发布及验收证据见验证记录。
 
 文档解析支持文本型 PDF、DOCX、TXT、Markdown、CSV、XLSX；不支持扫描件 OCR、加密文件、宏执行、代码计算。文本和 CSV 使用 UTF-8，可含 BOM。工具通过管理员选择的 HTTP 或 MCP Streamable HTTP 服务连接，不运行 stdio 程序。组织服务账号决定业务数据范围，不继承成员在外部业务系统中的个人权限。
 
@@ -123,7 +123,7 @@ gh run list --repo compcj/vibe-domain-agent --workflow publish-ghcr.yml
 
 工作流锁定运行开始时的 `main` SHA，使用锁文件测试、构建与数据库/Redis/Worker 冒烟验证，再发布不可变 `sha-<完整SHA>`。同一 SHA 已存在时校验并复用。拉取发布后的 digest 再验证，只有 `main` 仍指向该提交才更新 `latest`。仓库级并发组串行发布；普通 push、PR、Release 不发布镜像。
 
-首次发布后，在 Package settings 显式设置 Public，并验证匿名拉取。公开仓库不代表 Package 自动公开。后续部署拉取方式：
+本项目的 GHCR Package 已公开，并通过匿名拉取验证。若在其他仓库复用工作流，首次发布后需在 Package settings 显式设置 Public；公开仓库不代表 Package 自动公开。后续部署拉取方式：
 
 ```sh
 docker pull ghcr.io/compcj/vibe-domain-agent:sha-<完整提交SHA>
@@ -142,6 +142,8 @@ docker pull ghcr.io/compcj/vibe-domain-agent@sha256:<发布摘要>
 
 回滚先检查目标版本是否兼容当前数据库 schema；更换旧镜像不等于数据库回滚。兼容时恢复旧 digest 并重新启动；不兼容时在新部署中恢复升级前的联合备份，再切换入口。避免对仍有业务写入的库直接运行降级迁移。
 
+已验证的基础版本 `6ecfd61` → 完整版本 `391e19b` 升级属于不兼容直接降级的情况：基础镜像拒绝新版 schema，回滚需要升级前备份。该路径的待确认任务恢复及备份回滚已通过，详见验证记录。
+
 备份脚本检查正在运行的 API、Workers 和调度器使用同一镜像及密钥配置，再暂停这些服务与入口，联合保存 PostgreSQL（含检查点）、文件卷和实际生效的密钥，随后恢复服务。镜像以不可变 digest 与镜像 ID 记录在版本化 `recovery.json` 中；没有仓库 digest 的源码构建镜像会用 `docker save` 一并保存为 `application-image.tar`，恢复时加载并校验 ID。当前终端的 `APP_IMAGE` 或密钥覆盖值不会替代正在运行的值。辅助脚本从当前 `scripts/` 挂载到应用镜像执行，宿主机仅需 Docker Compose、Bash 和常用命令行工具。
 
 备份文件权限为 600，默认保留 7 天；备份包含私密资料和解密密钥，离机存放前应加密。源码镜像归档可能较大，请预留磁盘空间。示例 systemd service/timer 位于 `deploy/`，修改部署路径后由运维启用每日任务。仅配置文件不会自动启用系统定时器。
@@ -157,4 +159,4 @@ docker pull ghcr.io/compcj/vibe-domain-agent@sha256:<发布摘要>
 - 登录后又返回登录页：生产环境必须使用 HTTPS，并检查浏览器 Cookie 与反向代理地址。
 - 外部操作“结果待核实”：先到业务系统确认结果，管理员在运行与审计中登记结论，不要重复提交同一操作。
 - 文档解析失败：查看文件状态提示；确认格式、大小、是否加密或扫描件，不执行宏和公式计算。
-- 生产试点：真实模型效果、业务数据授权、30 分钟容量测试和用户验收需要目标环境验证，详见验证记录。
+- 生产试点：模拟服务下的 10 并发、30 分钟容量验证已通过；真实模型效果、业务授权、目标服务器容量和用户验收仍需现场验证，详见验证记录。

@@ -28,7 +28,7 @@
 
 ## 开发与验证
 
-Python 使用 uv 锁定依赖，前端使用 npm 锁文件。正式命令在工程建立后随 README 同步：`uv sync --frozen --group dev`、`uv run pytest`、`uv run ruff check backend`；前端在 `frontend` 执行 `npm ci`、`npm run check`、`npm test`、`npm run build`。只运行与变更有关的测试，最终交付运行完整验证。
+Python 使用 uv 锁定依赖，前端使用 npm 锁文件。仓库根目录执行 `uv sync --frozen --group dev`、`uv run pytest`、`uv run ruff check backend scripts`；前端在 `frontend` 执行 `npm ci`、`npm run check`、`npm test`、`npm run build`。浏览器测试先运行 `npx playwright install chromium`，再执行 `npm run test:e2e`。真实服务测试通过 `TEST_POSTGRES_URL` 和 `TEST_REDIS_URL` 启用；没有这些服务时，跳过结果不能算作服务验收。只运行与变更有关的测试，最终交付运行完整验证。Linux CI 另行执行真实容器、构建排除规则及联合备份恢复验证。
 
 ## Git 与发布
 
