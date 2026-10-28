@@ -53,7 +53,9 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Test locked source
+        timeout-minutes: 10
         env:
+          PYTHONUNBUFFERED: '1'
           TEST_POSTGRES_URL: postgresql+psycopg://vda:ci-only-password@127.0.0.1:5432/vda
           TEST_REDIS_URL: redis://127.0.0.1:6379/15
         run: |
@@ -61,7 +63,7 @@ jobs:
           python -m pip install uv==0.13.6
           uv sync --frozen --group dev
           uv run ruff check backend scripts
-          uv run pytest
+          uv run pytest -vv -o faulthandler_timeout=30
           npm --prefix frontend ci
           npm --prefix frontend run check
           npm --prefix frontend test
