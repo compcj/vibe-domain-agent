@@ -1,7 +1,8 @@
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.dependencies import DB, Admin
 from app.models import Agent, AgentVersion, ModelConnection, utcnow
@@ -31,6 +32,10 @@ def apply_model(model, data, settings):
     if set(values).intersection({"api_key", "base_url", "model", "kind"}):
         model.capabilities = {}
         model.tested_at = None
+        # Force both resets even if a concurrent probe changed the database after
+        # this request loaded an already-untested identity-map object.
+        flag_modified(model, "capabilities")
+        flag_modified(model, "tested_at")
     if "api_key" in values:
         try:
             model.api_key_encrypted = encrypt_secret(values.pop("api_key"), settings)
@@ -93,9 +98,26 @@ def test_model(identifier: UUID, request: Request, db: DB, admin: Admin):
         raise HTTPException(409, "Model is disabled")
     from app.knowledge.probes import probe
 
+    # Detach the immutable probe input and release the transaction before network I/O.
+    fields = ("base_url", "model", "api_key_encrypted", "kind", "enabled")
+    expected = {field: getattr(model, field) for field in fields}
+    model_id = model.id
+    db.expunge(model)
+    db.commit()
     result = probe(request.app.state, model)
-    model.capabilities = result["capabilities"]
-    model.tested_at = utcnow()
-    audit(db, admin, "connection_test", "model", model.id)
+    changed = db.execute(
+        update(ModelConnection)
+        .where(
+            ModelConnection.id == model_id,
+            *(getattr(ModelConnection, field) == value for field, value in expected.items()),
+        )
+        .values(capabilities=result["capabilities"], tested_at=utcnow())
+    ).rowcount
+    if not changed:
+        db.rollback()
+        raise HTTPException(
+            409, "Model configuration changed; test the current configuration again"
+        )
+    audit(db, admin, "connection_test", "model", model_id)
     db.commit()
     return result

@@ -144,15 +144,16 @@ def execute(state, run_id, resume=False):
             if size > 200000:
                 raise SafeFailure("Conversation context exceeds the configured size limit")
             user = live_access(db, run)
-            from app.knowledge.access import message_content
+            from app.knowledge.provenance import inherit_history
+
             history = db.scalars(
                 select(Message)
                 .where(Message.conversation_id == run.conversation_id)
                 .order_by(Message.created_at)
             ).all()
-            messages = [{"role": "system", "content": run.snapshot["system_prompt"]}] + [
-                {"role": message.role, "content": message_content(db, user, message)} for message in history
-            ]
+            messages = [
+                {"role": "system", "content": run.snapshot["system_prompt"]}
+            ] + inherit_history(db, run, user, history)
             citations = []
             db.commit()  # Release run fence before the RAG embedding network boundary.
             if state.runtime_context:

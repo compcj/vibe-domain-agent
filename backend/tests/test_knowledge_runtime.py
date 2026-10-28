@@ -255,7 +255,7 @@ def test_deleted_source_is_not_reintroduced_in_future_model_history(runtime_env)
     assert client.get(f"/api/v1/runs/{second}").json()["status"] == "completed"
 
 
-def test_removed_knowledge_binding_is_checked_before_query_embedding(runtime_env):
+def test_new_publication_keeps_existing_run_knowledge_snapshot(runtime_env):
     from app.models import Agent
     from app.runtime.engine import execute
 
@@ -272,10 +272,10 @@ def test_removed_knowledge_binding_is_checked_before_query_embedding(runtime_env
 
     def handler(request):
         calls.append(request)
-        return httpx.Response(200, json={"data": [{"embedding": [1, 0, 0]}]})
+        return transport([]).handle_request(request)
 
     app.state.http_transport = httpx.MockTransport(handler)
     execute(app.state, rid)
-    assert calls == []
+    assert any(request.url.path.endswith("/embeddings") for request in calls)
     login(client, "member")
-    assert client.get(f"/api/v1/runs/{rid}").json()["status"] == "failed"
+    assert client.get(f"/api/v1/runs/{rid}").json()["status"] == "completed"

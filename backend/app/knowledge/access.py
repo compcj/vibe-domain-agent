@@ -4,10 +4,10 @@ from fastapi import HTTPException
 from sqlalchemy import select, update
 
 from app.dependencies import can_use_agent
+from app.knowledge.lifecycle import enqueue
 from app.knowledge.models import Citation, Document, KnowledgeBase
 from app.knowledge.retrieval import configuration
-from app.knowledge.storage import remove_file
-from app.models import Agent, AgentVersion, Conversation
+from app.models import Agent, Conversation, Run
 from app.runtime.dto import CitationRead
 
 
@@ -40,8 +40,14 @@ def validate_attachments(db, user, conversation, ids):
             raise HTTPException(422, "Attachment is unavailable or not ready")
 
 
-def citation_allowed(db, citation, user, *, admin_debug=False):
+def citation_allowed(db, citation, user):
     if not citation or citation.owner_id != user.id or not user.active:
+        return False
+    origin = db.get(Run, citation.run_id)
+    if not origin or origin.owner_id != user.id:
+        return False
+    admin_debug = origin.debug and user.role == "admin"
+    if origin.debug and not admin_debug:
         return False
     doc = db.get(Document, citation.document_id) if citation.document_id else None
     if not doc or doc.status != "ready" or doc.revision != citation.revision:
@@ -57,10 +63,7 @@ def citation_allowed(db, citation, user, *, admin_debug=False):
         return False
     if not admin_debug and not can_use_agent(user, agent):
         return False
-    version = db.get(AgentVersion, agent.published_version_id)
-    if not admin_debug and (
-        not version or kb.id not in version.snapshot.get("knowledge_base_ids", [])
-    ):
+    if kb.id not in origin.snapshot.get("knowledge_base_ids", []):
         return False
     try:
         configuration(db, kb)
@@ -89,7 +92,7 @@ def erase_document(db, state, doc):
     db.execute(
         update(Citation).where(Citation.document_id == doc.id).values(document_id=None, excerpt="")
     )
-    remove_file(state, doc.storage_key)
+    enqueue(db, state, doc.storage_key)
     db.delete(doc)
 
 
@@ -101,13 +104,7 @@ def cleanup_conversation(state, db, identifier):
 def validate_run_citations(db, run, user, values):
     for value in values:
         citation = db.get(Citation, value.get("id", ""))
-        if (
-            not citation
-            or citation.run_id != run.id
-            or not citation_allowed(
-                db, citation, user, admin_debug=run.debug and user.role == "admin"
-            )
-        ):
+        if not citation or citation.run_id != run.id or not citation_allowed(db, citation, user):
             raise HTTPException(403, "Reference material is no longer available")
 
 
@@ -115,7 +112,13 @@ UNAVAILABLE_ANSWER = "Referenced answer is no longer available"
 
 
 def references_hidden(db, user, run_id):
-    refs = db.scalars(select(Citation).where(Citation.run_id == run_id)).all()
+    from app.knowledge.provenance import inherited_references
+
+    refs = list(db.scalars(select(Citation).where(Citation.run_id == run_id)))
+    refs.extend(
+        db.get(Citation, ref.citation_id) if ref.citation_id else None
+        for ref in inherited_references(db, run_id)
+    )
     return any(not citation_allowed(db, ref, user) for ref in refs)
 
 
@@ -129,11 +132,6 @@ def validate_run_knowledge(db, run, user):
     ids = run.snapshot.get("knowledge_base_ids", [])
     if not ids:
         return
-    conversation = db.get(Conversation, run.conversation_id)
-    agent = db.get(Agent, conversation.agent_id)
-    if not (run.debug and user.role == "admin"):
-        version = db.get(AgentVersion, agent.published_version_id)
-        allowed = set(version.snapshot.get("knowledge_base_ids", [])) if version else set()
-        if not set(ids).issubset(allowed):
-            raise HTTPException(403, "Knowledge access is no longer available")
+    # Publication/rollback affects future runs. Live owner/Agent grants are checked
+    # by live_access; deletion/disablement of the frozen resources still fails closed.
     validate_knowledge(db, ids)

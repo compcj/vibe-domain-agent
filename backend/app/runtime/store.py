@@ -146,7 +146,9 @@ def live_access(db, run, tool_id=None):
             raise HTTPException(403, "Tool is no longer available")
     from app.knowledge.access import validate_run_citations, validate_run_knowledge
     from app.knowledge.models import Citation
+    from app.knowledge.provenance import validate_inherited
 
+    validate_inherited(db, run, user)
     validate_run_knowledge(db, run, user)
     references = db.scalars(select(Citation).where(Citation.run_id == run.id)).all()
     if references:

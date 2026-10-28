@@ -68,3 +68,18 @@ class Citation(IdentityMixin, Base):
     title: Mapped[str] = mapped_column(String(200))
     locator: Mapped[str] = mapped_column(String(500))
     excerpt: Mapped[str] = mapped_column(Text)
+
+
+class RunSource(IdentityMixin, Base):
+    __tablename__ = "run_sources"
+    __table_args__ = (UniqueConstraint("run_id", "citation_id", name="uq_run_source"),)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id", ondelete="CASCADE"), index=True)
+    citation_id: Mapped[str | None] = mapped_column(
+        ForeignKey("citations.id", ondelete="SET NULL"), nullable=True
+    )
+
+
+class FileCleanup(IdentityMixin, Base):
+    __tablename__ = "file_cleanup"
+    attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    storage_key: Mapped[str] = mapped_column(String(100), unique=True)

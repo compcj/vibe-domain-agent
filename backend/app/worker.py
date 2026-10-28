@@ -29,6 +29,7 @@ celery_app.conf.update(
     task_time_limit=360,
     broker_transport_options={"visibility_timeout": 450},
     beat_schedule={
+        "cleanup-files": {"task": "app.knowledge.tasks.cleanup_files", "schedule": 30.0},
         "recover-indexing": {"task": "app.knowledge.tasks.recover", "schedule": 30.0},
         "recover-runs": {"task": "app.worker.recover_runs", "schedule": 30.0},
         "cleanup-retention": {"task": "app.worker.cleanup_retention", "schedule": 86400.0},

@@ -2,7 +2,7 @@ import copy
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from app.dependencies import DB, Admin, CurrentUser, can_use_agent
 from app.models import Agent, AgentVersion, ModelConnection
@@ -21,7 +21,20 @@ from app.security import audit
 router = APIRouter(tags=["agents"])
 
 
+def lock_agent(db, identifier):
+    if not db.execute(
+        update(Agent).where(Agent.id == str(identifier)).values(name=Agent.name)
+    ).rowcount:
+        raise HTTPException(404, "Resource not found")
+    return db.scalar(
+        select(Agent).where(Agent.id == str(identifier)).execution_options(populate_existing=True)
+    )
+
+
 def validate_publication(db, snapshot, app_state):
+    from app.knowledge.locking import lock_references
+
+    lock_references(db, snapshot.get("knowledge_base_ids", []))
     draft = Draft.model_validate(snapshot)
     if not draft.system_prompt.strip() or not draft.model_id:
         raise HTTPException(422, "A model and nonempty system prompt are required")
@@ -44,6 +57,9 @@ def apply_agent(agent, data, db):
     if data.draft is not None and "draft" in values:
         # Draft patches replace the complete draft; defaults are explicit snapshots.
         values["draft"] = data.draft.model_dump(mode="json")
+        from app.knowledge.locking import lock_references
+
+        lock_references(db, values["draft"].get("knowledge_base_ids", []))
     for key, value in values.items():
         setattr(agent, key, value)
 
@@ -71,7 +87,7 @@ def agent(identifier: UUID, db: DB, admin: Admin):
 
 @router.patch("/admin/agents/{identifier}", response_model=AgentRead)
 def update_agent(identifier: UUID, data: AgentPatch, db: DB, admin: Admin):
-    agent = get_object(db, Agent, identifier)
+    agent = lock_agent(db, identifier)
     apply_agent(agent, data, db)
     audit(db, admin, "update", "agent", agent.id)
     db.commit()
@@ -80,9 +96,7 @@ def update_agent(identifier: UUID, data: AgentPatch, db: DB, admin: Admin):
 
 @router.post("/admin/agents/{identifier}/publish", response_model=VersionRead, status_code=201)
 def publish(identifier: UUID, request: Request, db: DB, admin: Admin):
-    agent = db.scalar(select(Agent).where(Agent.id == str(identifier)).with_for_update())
-    if not agent:
-        raise HTTPException(404, "Resource not found")
+    agent = lock_agent(db, identifier)
     validate_publication(db, agent.draft, request.app.state)
     count = (
         db.scalar(select(func.max(AgentVersion.version)).where(AgentVersion.agent_id == agent.id))
@@ -114,7 +128,7 @@ def versions(identifier: UUID, db: DB, admin: Admin):
 
 @router.post("/admin/agents/{identifier}/rollback", response_model=AgentRead)
 def rollback(identifier: UUID, data: Rollback, request: Request, db: DB, admin: Admin):
-    agent = get_object(db, Agent, identifier)
+    agent = lock_agent(db, identifier)
     version = get_object(db, AgentVersion, data.version_id)
     if version.agent_id != agent.id:
         raise HTTPException(404, "Resource not found")

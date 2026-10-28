@@ -28,18 +28,22 @@ def race_env(request, runtime_env):
     from app.security import hash_password
     from conftest import runtime_env as seed_runtime
     from fastapi.testclient import TestClient
+    from sqlalchemy import text
     from sqlalchemy.engine import make_url
     from sqlalchemy.schema import CreateSchema, DropSchema
 
     schema = "runtime_races_" + uuid4().hex
     base = make_engine(os.environ["TEST_POSTGRES_URL"])
     with base.begin() as connection:
+        connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public"))
         connection.execute(CreateSchema(schema))
     url = make_url(os.environ["TEST_POSTGRES_URL"])
     url = url.set(
         query={
             **url.query,
-            "options": "-csearch_path=" + schema + ",public -clock_timeout=5s -cstatement_timeout=30s",
+            "options": "-csearch_path="
+            + schema
+            + ",public -clock_timeout=5s -cstatement_timeout=30s",
         }
     )
     settings = Settings(

@@ -9,9 +9,11 @@ from app.dependencies import DB, Admin, CurrentUser, require_csrf
 from app.knowledge.access import citation_allowed, citation_dto, erase_document
 from app.knowledge.dto import FileRead, KnowledgeInput, KnowledgePatch, KnowledgeRead, SearchInput
 from app.knowledge.indexing import dispatch
+from app.knowledge.lifecycle import enqueue
+from app.knowledge.locking import lock_kb
 from app.knowledge.models import Chunk, Citation, Document, KnowledgeBase
 from app.knowledge.retrieval import configuration, search
-from app.knowledge.storage import path_for, remove_file, store_upload
+from app.knowledge.storage import path_for, store_upload
 from app.models import Agent, AgentVersion, Conversation, ModelConnection, Run
 from app.routers.users import get_object
 from app.runtime.dto import CitationRead
@@ -20,20 +22,6 @@ from app.security import audit
 
 router = APIRouter(tags=["knowledge and files"])
 Member = Annotated[object, Depends(require_csrf)]
-
-
-def lock_kb(db, identifier):
-    if not db.execute(
-        update(KnowledgeBase)
-        .where(KnowledgeBase.id == str(identifier))
-        .values(name=KnowledgeBase.name)
-    ).rowcount:
-        raise HTTPException(404, "Knowledge base not found")
-    return db.scalar(
-        select(KnowledgeBase)
-        .where(KnowledgeBase.id == str(identifier))
-        .execution_options(populate_existing=True)
-    )
 
 
 def apply_kb(db, kb, data):
@@ -106,9 +94,11 @@ def documents(identifier: UUID, db: DB, admin: Admin):
 def upload_document(
     identifier: UUID, request: Request, db: DB, admin: Admin, file: UploadFile = File()
 ):
+    # Authorization precedes storage allocation; write locks follow the upload fence.
+    configuration(db, get_object(db, KnowledgeBase, identifier))
+    key, checksum = store_upload(request.app.state, file, db)
     kb = lock_kb(db, identifier)
     configuration(db, kb)
-    key, checksum = store_upload(request.app.state, file)
     old_key = None
     try:
         doc = db.scalar(
@@ -134,12 +124,12 @@ def upload_document(
             db.add(doc)
         db.flush()
         audit(db, admin, "upload", "document", doc.id)
+        if old_key:
+            enqueue(db, request.app.state, old_key)
         db.commit()
     except Exception:
-        remove_file(request.app.state, key)
+        db.rollback()
         raise
-    if old_key:
-        remove_file(request.app.state, old_key)
     dispatch(request.app.state, doc.id)
     return doc
 
@@ -150,6 +140,13 @@ def delete_document(identifier: UUID, request: Request, db: DB, admin: Admin):
     if not doc.knowledge_base_id:
         raise HTTPException(404, "Document not found")
     kb = lock_kb(db, doc.knowledge_base_id)
+    doc = db.scalar(
+        select(Document)
+        .where(Document.id == str(identifier))
+        .execution_options(populate_existing=True)
+    )
+    if not doc:
+        raise HTTPException(404, "Document not found")
     erase_document(db, request.app.state, doc)
     db.flush()
     if not db.scalar(select(Document.id).where(Document.knowledge_base_id == kb.id)):
@@ -205,6 +202,8 @@ def upload_file(
     conversation_id: UUID = Form(),
     file: UploadFile = File(),
 ):
+    owned(db, Conversation, conversation_id, user)
+    key, checksum = store_upload(request.app.state, file, db)
     conversation = lock_conversation(db, user, conversation_id)
     if (
         db.scalar(
@@ -215,7 +214,6 @@ def upload_file(
         >= 5
     ):
         raise HTTPException(409, "At most five files are allowed per conversation")
-    key, checksum = store_upload(request.app.state, file)
     doc = Document(
         conversation_id=conversation.id,
         owner_id=user.id,
@@ -229,7 +227,7 @@ def upload_file(
         audit(db, user, "upload", "attachment", doc.id)
         db.commit()
     except Exception:
-        remove_file(request.app.state, key)
+        db.rollback()
         raise
     dispatch(request.app.state, doc.id)
     return doc

@@ -13,3 +13,10 @@ def recover_indexing_task():
     from app.knowledge.indexing import recover_indexing
 
     return recover_indexing(runtime_state())
+
+
+@celery_app.task(name="app.knowledge.tasks.cleanup_files")
+def cleanup_files_task():
+    from app.knowledge.lifecycle import cleanup_files
+
+    return cleanup_files(runtime_state())

@@ -27,4 +27,19 @@ def make_session_factory(engine):
 def get_db(request: Request):
     with request.app.state.session_factory() as session:
         session.info["app"] = request.app.state
-        yield session
+        try:
+            yield session
+        finally:
+            keys = session.info.pop("upload_keys", set())
+            if keys:
+                # Failed/quota-rejected requests promptly reclaim their durable upload
+                # intents. Crashes still leave them for the scheduled cleanup worker.
+                from sqlalchemy.exc import SQLAlchemyError
+
+                from app.knowledge.lifecycle import cleanup_files
+
+                session.rollback()
+                try:
+                    cleanup_files(request.app.state, keys=keys)
+                except (OSError, SQLAlchemyError):
+                    pass
